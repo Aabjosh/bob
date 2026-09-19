@@ -1257,7 +1257,7 @@ static void animate_story_gesture() {
     static uint32_t last_gesture_ms = 0;
     static int gesture_step = 0;
     uint32_t now = millis();
-    if (now - last_gesture_ms < 350) return; // Update gesture pose every 350ms
+    if (now - last_gesture_ms < 1500) return; // Update gesture pose every 1.5s for slow, natural movements
     last_gesture_ms = now;
 
     // Cycle through natural human conversational gestures
