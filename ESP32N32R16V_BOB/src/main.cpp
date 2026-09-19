@@ -1253,6 +1253,49 @@ static bool read_serial_command(String* command) {
     return false;
 }
 
+static void animate_story_gesture() {
+    static uint32_t last_gesture_ms = 0;
+    static int gesture_step = 0;
+    uint32_t now = millis();
+    if (now - last_gesture_ms < 350) return; // Update gesture pose every 350ms
+    last_gesture_ms = now;
+
+    // Cycle through natural human conversational gestures
+    switch (gesture_step % 6) {
+        case 0: // Right arm gesture forward, head slightly right
+            write_servo_angle(kRightArmServoChannel, 130);
+            write_servo_angle(kLeftArmServoChannel, 80);
+            write_servo_angle(kHeadServoChannel, 98);
+            break;
+        case 1: // Left arm gesture forward, head centered
+            write_servo_angle(kRightArmServoChannel, 80);
+            write_servo_angle(kLeftArmServoChannel, 130);
+            write_servo_angle(kHeadServoChannel, 90);
+            break;
+        case 2: // Open both arms (emphasizing a point)
+            write_servo_angle(kRightArmServoChannel, 120);
+            write_servo_angle(kLeftArmServoChannel, 120);
+            write_servo_angle(kHeadServoChannel, 82);
+            break;
+        case 3: // Slight head nod/tilt down, arms neutral
+            write_servo_angle(kRightArmServoChannel, 90);
+            write_servo_angle(kLeftArmServoChannel, 90);
+            write_servo_angle(kHeadServoChannel, 100);
+            break;
+        case 4: // Right arm accent pose
+            write_servo_angle(kRightArmServoChannel, 140);
+            write_servo_angle(kLeftArmServoChannel, 70);
+            write_servo_angle(kHeadServoChannel, 88);
+            break;
+        case 5: // Both arms relaxed expressive gesture
+            write_servo_angle(kRightArmServoChannel, 100);
+            write_servo_angle(kLeftArmServoChannel, 100);
+            write_servo_angle(kHeadServoChannel, 92);
+            break;
+    }
+    gesture_step++;
+}
+
 static void generate_story(const String& prompt) {
     Serial.printf("\nStory prompt: %s\n", prompt.c_str());
     size_t capacity = prompt.length() + 3;
@@ -1275,10 +1318,18 @@ static void generate_story(const String& prompt) {
         if (pos >= n_tokens - 1) { Serial.print(decode(&tokenizer, previous_token, next)); previous_token = next; }
         else previous_token = token_ids[pos];
         current_token = pos < n_tokens - 1 ? token_ids[pos + 1] : next;
+        
+        // Perform non-blocking gestures while speaking/telling story
+        animate_story_gesture();
+
         if (next == 2) break;
         yield();
     }
     Serial.println("\n--- Done ---");
+    // Return arms and head to neutral resting position
+    write_servo_angle(kLeftArmServoChannel, 90);
+    write_servo_angle(kRightArmServoChannel, 90);
+    write_servo_angle(kHeadServoChannel, 90);
     free(sampler.probindex); free(prompt_buf); free(token_ids);
 }
 
