@@ -645,6 +645,12 @@ constexpr uint8_t kSclPin = 13;
 constexpr uint8_t kHeadServoChannel = 15;
 constexpr uint8_t kLeftArmServoChannel = 14;
 constexpr uint8_t kRightArmServoChannel = 13;
+
+constexpr uint8_t kLeftWheelIn1Pin = 10;
+constexpr uint8_t kLeftWheelIn2Pin = 11;
+constexpr uint8_t kRightWheelIn3Pin = 15;
+constexpr uint8_t kRightWheelIn4Pin = 16;
+
 constexpr uint16_t kServoMinPulse = 500;
 constexpr uint16_t kServoMaxPulse = 2400;
 
@@ -894,6 +900,25 @@ static void write_servo_angle(uint8_t channel, int angle) {
     write_pca_pulse(channel, pulse);
 }
 
+static void set_wheel_direction(uint8_t in_a, uint8_t in_b, bool forward) {
+    digitalWrite(in_a, forward ? HIGH : LOW);
+    digitalWrite(in_b, forward ? LOW : HIGH);
+}
+
+static void stop_wheels() {
+    digitalWrite(kLeftWheelIn1Pin, LOW);
+    digitalWrite(kLeftWheelIn2Pin, LOW);
+    digitalWrite(kRightWheelIn3Pin, LOW);
+    digitalWrite(kRightWheelIn4Pin, LOW);
+}
+
+static void drive_wheels(bool left_forward, bool right_forward, uint32_t duration_ms) {
+    set_wheel_direction(kLeftWheelIn1Pin, kLeftWheelIn2Pin, left_forward);
+    set_wheel_direction(kRightWheelIn3Pin, kRightWheelIn4Pin, right_forward);
+    delay(duration_ms);
+    stop_wheels();
+}
+
 static void clearCommandQueue();
 
 static void dispatch_motor_command(int intent_id, int value, uint32_t duration_ms) {
@@ -914,8 +939,18 @@ static void dispatch_motor_command(int intent_id, int value, uint32_t duration_m
         case 2:
             write_servo_angle(kRightArmServoChannel, value);
             break;
-        case 3: case 4: case 9: case 10:
-            Serial.printf("MOTOR %s unavailable: DC wheels are not connected\n", kIntentClassNames[intent_id]);
+        case 3: // MOVE_FORWARD
+            drive_wheels(false, false, duration_ms);
+            break;
+        case 4: // MOVE_BACKWARD
+            drive_wheels(true, true, duration_ms);
+            Serial.println(duration_ms);
+            break;
+        case 9: // TURN_LEFT
+            drive_wheels(true, false, duration_ms);
+            break;
+        case 10: // TURN_RIGHT
+            drive_wheels(false, true, duration_ms);
             break;
         case 5:
             write_servo_angle(kHeadServoChannel, 60); delay(duration_ms / 2);
@@ -1186,6 +1221,10 @@ static void generate_story(const String& prompt) {
 void setup() {
     Serial.begin(115200);
     Wire.begin(kSdaPin, kSclPin);
+   pinMode(kLeftWheelIn1Pin, OUTPUT);
+pinMode(kLeftWheelIn2Pin, OUTPUT);
+pinMode(kRightWheelIn3Pin, OUTPUT);
+pinMode(kRightWheelIn4Pin, OUTPUT);
     if (!pca9685.begin()) {
         Serial.println("BOOT: PCA9685 not found at 0x40.");
         return;
