@@ -306,13 +306,20 @@ TEST_DATASET = {
 
 
 
+NOISE_WORDS = [
+    "um", "uh", "ah", "like", "just", "so", "actually", "basically", "literally",
+    "potato", "hello", "robot", "hey", "bob", "listen", "please", "now", "there",
+    "what", "why", "when", "how", "who", "which", "is", "the", "a", "an", "this",
+    "that", "these", "those", "can", "you", "do", "it", "for", "me", "to", "and",
+]
+
 def tokenize(text: str) -> list[str]:
     """Match the firmware tokenizer: lowercase ASCII words and digits."""
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
 def build_vocabulary() -> dict[str, int]:
-    all_phrases = list(TRAIN_DATASET.values()) + list(TEST_DATASET.values())
+    all_phrases = list(TRAIN_DATASET.values()) + list(TEST_DATASET.values()) + [NOISE_WORDS]
     words = sorted({word for phrases in all_phrases for text in phrases for word in tokenize(text)})
     return {"<PAD>": 0, "<UNK>": 1, **{word: index + 2 for index, word in enumerate(words)}}
 
@@ -389,9 +396,26 @@ def write_story_starters_header() -> None:
     (OUTPUT_DIR / "story_starters.json").write_text(json.dumps(STORY_STARTERS, indent=2) + "\n", encoding="ascii")
 
 
-def make_examples(dataset: dict[str, list[str]], vocabulary: dict[str, int]) -> tuple[np.ndarray, np.ndarray]:
-    texts = [text for intent in INTENTS for text in dataset[intent]]
-    labels = [intent_id for intent_id, intent in enumerate(INTENTS) for _ in dataset[intent]]
+def make_examples(dataset: dict[str, list[str]], vocabulary: dict[str, int], augment_noise=False) -> tuple[np.ndarray, np.ndarray]:
+    texts = []
+    labels = []
+    import random
+    rng = random.Random(SEED)
+    for intent_id, intent in enumerate(INTENTS):
+        for text in dataset[intent]:
+            texts.append(text)
+            labels.append(intent_id)
+            if augment_noise:
+                # Add 3 noisy versions of each training sample
+                for _ in range(3):
+                    words = text.split()
+                    # Insert 1-3 random noise words at random positions
+                    for _ in range(rng.randint(1, 3)):
+                        pos = rng.randint(0, len(words))
+                        words.insert(pos, rng.choice(NOISE_WORDS))
+                    texts.append(" ".join(words))
+                    labels.append(intent_id)
+                    
     return (
         np.asarray([encode(text, vocabulary) for text in texts], dtype=np.int32),
         np.asarray(labels, dtype=np.int32),
@@ -450,8 +474,8 @@ def main() -> None:
     write_vocab_header(vocabulary)
     write_story_starters_header()
 
-    x, y = make_examples(TRAIN_DATASET, vocabulary)
-    x_test, y_test = make_examples(TEST_DATASET, vocabulary)
+    x, y = make_examples(TRAIN_DATASET, vocabulary, augment_noise=True)
+    x_test, y_test = make_examples(TEST_DATASET, vocabulary, augment_noise=False)
     order = np.random.permutation(len(x))
     x, y = x[order], y[order]
     validation_size = max(len(INTENTS), len(x) // 6)

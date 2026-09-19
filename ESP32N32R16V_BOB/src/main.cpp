@@ -965,8 +965,9 @@ static void write_servo_angle(uint8_t channel, int angle) {
 }
 
 static void set_wheel_direction(uint8_t in_a, uint8_t in_b, bool forward) {
-    digitalWrite(in_a, forward ? HIGH : LOW);
-    digitalWrite(in_b, forward ? LOW : HIGH);
+    int speed = 150; // Slower motor speed (PWM 0-255)
+    analogWrite(in_a, forward ? speed : 0);
+    analogWrite(in_b, forward ? 0 : speed);
 }
 
 static void stop_wheels() {
@@ -998,7 +999,7 @@ static void dispatch_motor_command(int intent_id, int value, uint32_t duration_m
             write_servo_angle(kLeftArmServoChannel, 70 - value);
             break;
         case 1:
-            write_servo_angle(kLeftArmServoChannel, 70 - value);
+            write_servo_angle(kLeftArmServoChannel,  70 - value);
             break;
         case 2:
             write_servo_angle(kRightArmServoChannel, value);
@@ -1097,9 +1098,33 @@ static int command_value(const String& text) {
     String lowered = text; lowered.toLowerCase();
     if (lowered.indexOf("little") >= 0 || lowered.indexOf("slightly") >= 0) return 30;
     if (lowered.indexOf("lot") >= 0 || lowered.indexOf("far") >= 0 || lowered.indexOf("large") >= 0) return 150;
-    for (size_t i = 0; i < text.length(); ++i) {
-        if (isDigit(text[i])) return constrain(text.substring(i).toInt(), 0, 180);
+    
+    for (size_t i = 0; i < lowered.length(); ++i) {
+        if (isDigit(lowered[i])) return constrain(lowered.substring(i).toInt(), 0, 180);
     }
+    
+    // Handle word-based numbers for angles
+    String s = " " + lowered + " ";
+    if (s.indexOf(" one eighty ") >= 0) return 180;
+    if (s.indexOf(" one seventy ") >= 0) return 170;
+    if (s.indexOf(" one sixty ") >= 0) return 160;
+    if (s.indexOf(" one fifty ") >= 0) return 150;
+    if (s.indexOf(" one forty ") >= 0) return 140;
+    if (s.indexOf(" one thirty ") >= 0) return 130;
+    if (s.indexOf(" one twenty ") >= 0) return 120;
+    if (s.indexOf(" one ten ") >= 0) return 110;
+    if (s.indexOf(" one hundred ") >= 0) return 100;
+    if (s.indexOf(" ninety ") >= 0) return 90;
+    if (s.indexOf(" eighty ") >= 0) return 80;
+    if (s.indexOf(" seventy ") >= 0) return 70;
+    if (s.indexOf(" sixty ") >= 0) return 60;
+    if (s.indexOf(" fifty ") >= 0) return 50;
+    if (s.indexOf(" forty ") >= 0) return 40;
+    if (s.indexOf(" thirty ") >= 0) return 30;
+    if (s.indexOf(" twenty ") >= 0) return 20;
+    if (s.indexOf(" ten ") >= 0) return 10;
+    if (s.indexOf(" zero ") >= 0) return 0;
+    
     return 90;
 }
 
@@ -1119,7 +1144,8 @@ static int next_sequence_separator(const String& text, int* separator_length) {
     }
     const char* command_starts[] = {
         "turn ", "go ", "move ", "walk ", "drive ", "rotate ", "look ",
-        "tilt ", "shake ", "nod ", "dance", "stop", "wait ", "pause "
+        "tilt ", "shake ", "nod ", "dance", "stop", "wait ", "pause ",
+        "left arm ", "right arm ", "both arms ", "head "
     };
     const int command_start_count = sizeof(command_starts) / sizeof(command_starts[0]);
     for (int i = 0; i < command_start_count; ++i) {
@@ -1260,44 +1286,38 @@ static void animate_story_gesture() {
     if (now - last_gesture_ms < 1500) return; // Update gesture pose every 1.5s for slow, natural movements
     last_gesture_ms = now;
 
-    // Cycle through natural human conversational gestures
+    // Cycle through natural human conversational gestures (Arms only, head stays neutral)
     switch (gesture_step % 6) {
-        case 0: // Right arm gesture forward, head slightly right
+        case 0: // Right arm gesture forward
             write_servo_angle(kRightArmServoChannel, 130);
             write_servo_angle(kLeftArmServoChannel, 80);
-            write_servo_angle(kHeadServoChannel, 98);
             break;
-        case 1: // Left arm gesture forward, head centered
+        case 1: // Left arm gesture forward
             write_servo_angle(kRightArmServoChannel, 80);
             write_servo_angle(kLeftArmServoChannel, 130);
-            write_servo_angle(kHeadServoChannel, 90);
             break;
         case 2: // Open both arms (emphasizing a point)
             write_servo_angle(kRightArmServoChannel, 120);
             write_servo_angle(kLeftArmServoChannel, 120);
-            write_servo_angle(kHeadServoChannel, 82);
             break;
-        case 3: // Slight head nod/tilt down, arms neutral
+        case 3: // Arms neutral
             write_servo_angle(kRightArmServoChannel, 90);
             write_servo_angle(kLeftArmServoChannel, 90);
-            write_servo_angle(kHeadServoChannel, 100);
             break;
         case 4: // Right arm accent pose
             write_servo_angle(kRightArmServoChannel, 140);
             write_servo_angle(kLeftArmServoChannel, 70);
-            write_servo_angle(kHeadServoChannel, 88);
             break;
         case 5: // Both arms relaxed expressive gesture
             write_servo_angle(kRightArmServoChannel, 100);
             write_servo_angle(kLeftArmServoChannel, 100);
-            write_servo_angle(kHeadServoChannel, 92);
             break;
     }
     gesture_step++;
 }
 
 static void generate_story(const String& prompt) {
-    Serial.printf("\nStory prompt: %s\n", prompt.c_str());
+    Serial.println("\nSTORY_START");
     size_t capacity = prompt.length() + 3;
     char* prompt_buf = static_cast<char*>(malloc(capacity));
     int* token_ids = static_cast<int*>(malloc(capacity * sizeof(int)));
@@ -1325,7 +1345,7 @@ static void generate_story(const String& prompt) {
         if (next == 2) break;
         yield();
     }
-    Serial.println("\n--- Done ---");
+    Serial.println("\nSTORY_DONE");
     // Return arms and head to neutral resting position
     write_servo_angle(kLeftArmServoChannel, 90);
     write_servo_angle(kRightArmServoChannel, 90);
