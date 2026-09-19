@@ -1,10 +1,24 @@
 #include <Arduino.h>
 #include <SPIFFS.h>
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
 #include <esp_heap_caps.h>
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
 #include <cmath>
+#include <cctype>
+#include <TensorFlowLite_ESP32.h>
+#include "generated/model_data.h"
+#include "generated/model_metadata.h"
+#include "generated/story_starters.h"
+#include "generated/vocab.h"
+#include "tensorflow/lite/c/common.h"
+#include "tensorflow/lite/micro/all_ops_resolver.h"
+#include "tensorflow/lite/micro/micro_error_reporter.h"
+#include "tensorflow/lite/micro/micro_interpreter.h"
+#include "tensorflow/lite/schema/schema_generated.h"
+#include "esp_heap_caps.h"
 
 typedef struct {
     int dim; // transformer dimension
@@ -616,6 +630,154 @@ RunState state;
 Tokenizer tokenizer;
 bool model_loaded = false;
 
+namespace {
+constexpr int kIntentCount = INTENT_METADATA_CLASS_COUNT;
+constexpr int kMaxQueuedCommands = 8;
+constexpr float kIntentThreshold = 0.55f;
+constexpr size_t kTensorArenaSize = 256 * 1024;
+
+constexpr uint8_t kPca9685Address = 0x40;
+constexpr uint8_t kSdaPin = 14;
+constexpr uint8_t kSclPin = 13;
+constexpr uint8_t kHeadServoChannel = 15;
+constexpr uint8_t kLeftArmServoChannel = 14;
+constexpr uint8_t kRightArmServoChannel = 13;
+constexpr uint16_t kServoMinPulse = 500;
+constexpr uint16_t kServoMaxPulse = 2400;
+
+Adafruit_PWMServoDriver pca9685(kPca9685Address);
+bool pca9685_ready = false;
+
+uint8_t* intent_tensor_arena = nullptr;
+tflite::MicroInterpreter* intent_interpreter = nullptr;
+TfLiteTensor* intent_input = nullptr;
+TfLiteTensor* intent_output = nullptr;
+String serial_buffer;
+
+struct MotorCommand {
+    int intent_id;
+    int value;
+    uint32_t duration_ms;
+};
+
+MotorCommand command_queue[kMaxQueuedCommands];
+int queue_head = 0;
+int queue_tail = 0;
+int queued_command_count = 0;
+
+int lookup_intent_token(const char* word) {
+    for (int id = 0; id < INTENT_VOCAB_SIZE; ++id) {
+        if (strcmp(word, kIntentVocabulary[id]) == 0) return id;
+    }
+    return INTENT_UNK_ID;
+}
+
+void tokenize_intent(const String& text, TfLiteTensor* input) {
+    for (int i = 0; i < INTENT_MAX_TOKENS; ++i) input->data.i32[i] = INTENT_PAD_ID;
+    String word;
+    int token_index = 0;
+    for (size_t i = 0; i <= text.length() && token_index < INTENT_MAX_TOKENS; ++i) {
+        char c = i < text.length() ? text[i] : ' ';
+        bool word_char = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                         (c >= '0' && c <= '9');
+        if (word_char) {
+            word += static_cast<char>(tolower(static_cast<unsigned char>(c)));
+        } else if (word.length() > 0) {
+            char word_buffer[32];
+            word.toCharArray(word_buffer, sizeof(word_buffer));
+            input->data.i32[token_index++] = lookup_intent_token(word_buffer);
+            word = "";
+        }
+    }
+}
+
+int rule_based_intent(const String& raw_text) {
+    String text = raw_text;
+    text.toLowerCase();
+    if (text.indexOf("arm") >= 0 && text.indexOf("left") >= 0) return 1;
+    if (text.indexOf("arm") >= 0 && text.indexOf("right") >= 0) return 2;
+    bool has_head = text.indexOf("head") >= 0;
+    if (has_head && (text.indexOf("shake") >= 0 ||
+                     (text.indexOf("left") >= 0 && text.indexOf("right") >= 0))) return 5;
+    if (has_head && (text.indexOf("nod") >= 0 || text.indexOf("bob") >= 0 ||
+                     text.indexOf("yes") >= 0)) return 6;
+    if (has_head && text.indexOf("left") >= 0) return 7;
+    if (has_head && text.indexOf("right") >= 0) return 8;
+    if (text.indexOf("stop") >= 0 || text.indexOf("halt") >= 0 ||
+        text.indexOf("freeze") >= 0 || text.indexOf("hold position") >= 0) return 12;
+    return -1;
+}
+
+bool is_story_request(const String& raw_text) {
+    String text = raw_text;
+    text.toLowerCase();
+    bool has_story = text.indexOf("story") >= 0 || text.indexOf("tale") >= 0;
+    bool asks_to_generate = text.indexOf("tell") >= 0 || text.indexOf("read") >= 0 ||
+                            text.indexOf("make") >= 0 || text.indexOf("write") >= 0 ||
+                            text.indexOf("start") >= 0 || text.indexOf("give") >= 0;
+        return (has_story && asks_to_generate) || text.equals("story") || text.equals("a story") ||
+            text.equals("story please") || text.equals("story now");
+}
+
+bool initialize_intent_classifier() {
+    static tflite::MicroErrorReporter reporter;
+    static tflite::AllOpsResolver resolver;
+    const tflite::Model* model = tflite::GetModel(g_intent_model);
+    if (model->version() != TFLITE_SCHEMA_VERSION) return false;
+    intent_tensor_arena = static_cast<uint8_t*>(heap_caps_malloc(
+        kTensorArenaSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!intent_tensor_arena) intent_tensor_arena = static_cast<uint8_t*>(
+        heap_caps_malloc(kTensorArenaSize, MALLOC_CAP_8BIT));
+    if (!intent_tensor_arena) return false;
+    static tflite::MicroInterpreter interpreter(model, resolver, intent_tensor_arena,
+                                                kTensorArenaSize, &reporter);
+    intent_interpreter = &interpreter;
+    if (intent_interpreter->AllocateTensors() != kTfLiteOk) return false;
+    intent_input = intent_interpreter->input(0);
+    intent_output = intent_interpreter->output(0);
+    return intent_input->type == kTfLiteInt32 && intent_input->dims->size == 2 &&
+           intent_input->dims->data[0] == 1 && intent_input->dims->data[1] == INTENT_MAX_TOKENS &&
+           intent_output->dims->size == 2 && intent_output->dims->data[0] == 1 &&
+           intent_output->dims->data[1] == kIntentCount;
+}
+
+float intent_output_value(int index) {
+    if (intent_output->type == kTfLiteInt8) {
+        return (static_cast<float>(intent_output->data.int8[index]) - intent_output->params.zero_point) *
+               intent_output->params.scale;
+    }
+    if (intent_output->type == kTfLiteUInt8) {
+        return (static_cast<float>(intent_output->data.uint8[index]) - intent_output->params.zero_point) *
+               intent_output->params.scale;
+    }
+    return intent_output->data.f[index];
+}
+
+int classify_intent(const String& text, float* confidence) {
+    int rule_intent = rule_based_intent(text);
+    if (rule_intent >= 0) {
+        *confidence = 1.0f;
+        return rule_intent;
+    }
+    tokenize_intent(text, intent_input);
+    if (intent_interpreter->Invoke() != kTfLiteOk) {
+        *confidence = 0.0f;
+        return -1;
+    }
+    int best_intent = 0;
+    float best_score = intent_output_value(0);
+    for (int i = 1; i < kIntentCount; ++i) {
+        float score = intent_output_value(i);
+        if (score > best_score) {
+            best_score = score;
+            best_intent = i;
+        }
+    }
+    *confidence = best_score;
+    return best_intent;
+}
+}
+
 static void print_memory(const char* stage) {
     Serial.printf("BOOT: %s, heap=%u, psram=%u\n", stage,
                   (unsigned int)ESP.getFreeHeap(),
@@ -705,124 +867,246 @@ static bool load_model_from_spiffs(const char* path) {
     return true;
 }
 
+static void write_pca_pulse(uint8_t channel, uint16_t microseconds) {
+    if (pca9685_ready) pca9685.writeMicroseconds(channel, microseconds);
+}
+
+static void write_servo_angle(uint8_t channel, int angle) {
+    angle = constrain(angle, 0, 180);
+    uint16_t pulse = static_cast<uint16_t>(map(angle, 0, 180, kServoMinPulse, kServoMaxPulse));
+    write_pca_pulse(channel, pulse);
+}
+
+static void clearCommandQueue();
+
+static void dispatch_motor_command(int intent_id, int value, uint32_t duration_ms) {
+    Serial.printf("CASE %d: %s value=%d duration=%lu\n", intent_id,
+                  kIntentClassNames[intent_id], value,
+                  static_cast<unsigned long>(duration_ms));
+    switch (intent_id) {
+        case 0:
+            write_servo_angle(kLeftArmServoChannel, 70 - value);
+            break;
+        case 1:
+            write_servo_angle(kLeftArmServoChannel, 70 - value);
+            break;
+        case 2:
+            write_servo_angle(kRightArmServoChannel, value);
+            break;
+        case 3: case 4: case 9: case 10:
+            Serial.printf("MOTOR %s unavailable: DC wheels are not connected\n", kIntentClassNames[intent_id]);
+            break;
+        case 5:
+            write_servo_angle(kHeadServoChannel, 60); delay(duration_ms / 2);
+            write_servo_angle(kHeadServoChannel, 120); delay(duration_ms / 2);
+            break;
+        case 6:
+            write_servo_angle(kHeadServoChannel, 70); delay(duration_ms / 2);
+            write_servo_angle(kHeadServoChannel, 110); delay(duration_ms / 2);
+            break;
+        case 7: write_servo_angle(kHeadServoChannel, 90 + value / 2); break;
+        case 8: write_servo_angle(kHeadServoChannel, 90 - value / 2); break;
+        case 11:
+            write_servo_angle(kLeftArmServoChannel, 60);
+            write_servo_angle(kRightArmServoChannel, 120);
+            delay(duration_ms / 2);
+            write_servo_angle(kLeftArmServoChannel, 120);
+            write_servo_angle(kRightArmServoChannel, 60);
+            delay(duration_ms / 2);
+            break;
+        case 12:
+            write_servo_angle(kLeftArmServoChannel, 90);
+            write_servo_angle(kRightArmServoChannel, 90);
+            write_servo_angle(kHeadServoChannel, 90);
+            clearCommandQueue();
+            break;
+    }
+}
+
+static void clearCommandQueue() { queue_head = queue_tail = queued_command_count = 0; }
+
+static bool enqueue_command(int intent_id, int value, uint32_t duration_ms) {
+    if (queued_command_count >= kMaxQueuedCommands || duration_ms == 0) return false;
+    command_queue[queue_tail] = {intent_id, constrain(value, 0, 180), duration_ms};
+    queue_tail = (queue_tail + 1) % kMaxQueuedCommands;
+    ++queued_command_count;
+    return true;
+}
+
+static int command_value(const String& text) {
+    String lowered = text; lowered.toLowerCase();
+    if (lowered.indexOf("little") >= 0 || lowered.indexOf("slightly") >= 0) return 30;
+    if (lowered.indexOf("lot") >= 0 || lowered.indexOf("far") >= 0 || lowered.indexOf("large") >= 0) return 150;
+    for (size_t i = 0; i < text.length(); ++i) {
+        if (isDigit(text[i])) return constrain(text.substring(i).toInt(), 0, 180);
+    }
+    return 90;
+}
+
+static int next_sequence_separator(const String& text, int* separator_length) {
+    String lowered = text;
+    lowered.toLowerCase();
+    int best_position = -1;
+    *separator_length = 0;
+    const char* separators[] = {",", ";", " and then ", " and ", " then "};
+    const int separator_count = sizeof(separators) / sizeof(separators[0]);
+    for (int i = 0; i < separator_count; ++i) {
+        int position = lowered.indexOf(separators[i]);
+        if (position >= 0 && (best_position < 0 || position < best_position)) {
+            best_position = position;
+            *separator_length = strlen(separators[i]);
+        }
+    }
+    return best_position;
+}
+
+static bool plan_natural_language(const String& raw_text) {
+    clearCommandQueue();
+    String remaining = raw_text;
+    int accepted_commands = 0;
+
+    while (remaining.length() > 0 && accepted_commands < kMaxQueuedCommands) {
+        int separator_length = 0;
+        int separator = next_sequence_separator(remaining, &separator_length);
+        String segment = separator >= 0 ? remaining.substring(0, separator) : remaining;
+        remaining = separator >= 0 ? remaining.substring(separator + separator_length) : "";
+        segment.trim();
+        if (segment.length() == 0) continue;
+
+        String lowered = segment;
+        lowered.toLowerCase();
+        int arm_intent = lowered.indexOf("left") >= 0 ? 1 :
+                         lowered.indexOf("right") >= 0 ? 2 : -1;
+        if (lowered.indexOf("wave") >= 0 && arm_intent >= 0) {
+            if (!enqueue_command(arm_intent, 160, 350) ||
+                !enqueue_command(arm_intent, 20, 350)) {
+                clearCommandQueue();
+                return false;
+            }
+            accepted_commands += 2;
+            continue;
+        }
+
+        float confidence = 0.0f;
+        int intent = classify_intent(segment, &confidence);
+        Serial.printf("plan[%d] segment=\"%s\" intent=%s confidence=%.3f\n",
+                      accepted_commands + 1, segment.c_str(),
+                      intent >= 0 ? kIntentClassNames[intent] : "ERROR", confidence);
+        if (intent < 0 || confidence < kIntentThreshold) continue;
+
+        int value = command_value(segment);
+        if (intent == 1 || intent == 2) {
+            if (lowered.indexOf("up") >= 0 || lowered.indexOf("raise") >= 0 ||
+                lowered.indexOf("lift") >= 0 || lowered.indexOf("higher") >= 0) value = 160;
+            if (lowered.indexOf("down") >= 0 || lowered.indexOf("lower") >= 0 ||
+                lowered.indexOf("drop") >= 0) value = 20;
+        }
+        uint32_t duration = lowered.indexOf("little") >= 0 || lowered.indexOf("slightly") >= 0 ? 300 : 500;
+        if (!enqueue_command(intent, value, duration)) break;
+        ++accepted_commands;
+        if (intent == 12) break;
+    }
+    return queued_command_count > 0;
+}
+
+static bool parse_plan(String plan) {
+    clearCommandQueue(); plan.remove(0, 5); plan.trim();
+    while (plan.length() > 0) {
+        int separator = plan.indexOf(';');
+        String item = separator >= 0 ? plan.substring(0, separator) : plan;
+        plan = separator >= 0 ? plan.substring(separator + 1) : "";
+        item.trim();
+        int first = item.indexOf(','); int second = item.indexOf(',', first + 1);
+        if (first < 1 || second < 0) { clearCommandQueue(); return false; }
+        int intent = -1;
+        for (int i = 0; i < kIntentCount; ++i) if (item.substring(0, first).equals(kIntentClassNames[i])) intent = i;
+        uint32_t duration = static_cast<uint32_t>(item.substring(second + 1).toInt());
+        if (intent < 0 || !enqueue_command(intent, item.substring(first + 1, second).toInt(), duration)) {
+            clearCommandQueue(); return false;
+        }
+        if (intent == 12) break;
+    }
+    return queued_command_count > 0;
+}
+
+static void process_command_queue() {
+    if (queued_command_count == 0) return;
+    MotorCommand command = command_queue[queue_head];
+    queue_head = (queue_head + 1) % kMaxQueuedCommands; --queued_command_count;
+    dispatch_motor_command(command.intent_id, command.value, command.duration_ms);
+}
+
+static bool read_serial_command(String* command) {
+    while (Serial.available() > 0) {
+        char c = static_cast<char>(Serial.read());
+        if (c == '\n') { *command = serial_buffer; serial_buffer = ""; command->trim(); return command->length() > 0; }
+        if (c != '\r' && serial_buffer.length() < 128) serial_buffer += c;
+    }
+    return false;
+}
+
+static void generate_story(const String& prompt) {
+    Serial.printf("\nStory prompt: %s\n", prompt.c_str());
+    size_t capacity = prompt.length() + 3;
+    char* prompt_buf = static_cast<char*>(malloc(capacity));
+    int* token_ids = static_cast<int*>(malloc(capacity * sizeof(int)));
+    if (!prompt_buf || !token_ids) { Serial.println("Prompt allocation failed."); free(prompt_buf); free(token_ids); return; }
+    prompt.toCharArray(prompt_buf, capacity);
+    int n_tokens = 0; encode(&tokenizer, prompt_buf, 1, 0, token_ids, &n_tokens);
+    if (n_tokens > config.seq_len) { Serial.println("Story prompt is too long."); free(prompt_buf); free(token_ids); return; }
+    Sampler sampler{0.8f, 0.9f, config.vocab_size,
+                    static_cast<ProbIndex*>(ps_calloc(config.vocab_size, sizeof(ProbIndex))),
+                    static_cast<uint32_t>(micros())};
+    if (!sampler.probindex) { Serial.println("Sampler allocation failed."); free(prompt_buf); free(token_ids); return; }
+    int current_token = token_ids[0], previous_token = 1;
+    int total_steps = min(config.seq_len, n_tokens + 128);
+    for (int pos = 0; pos < total_steps; ++pos) {
+        Transformer model = {config, weights, state, 0, nullptr, 0};
+        int next = sample(&sampler, forward(&model, current_token, pos));
+        if (next < 0 || next >= config.vocab_size) next = 0;
+        if (pos >= n_tokens - 1) { Serial.print(decode(&tokenizer, previous_token, next)); previous_token = next; }
+        else previous_token = token_ids[pos];
+        current_token = pos < n_tokens - 1 ? token_ids[pos + 1] : next;
+        if (next == 2) break;
+        yield();
+    }
+    Serial.println("\n--- Done ---");
+    free(sampler.probindex); free(prompt_buf); free(token_ids);
+}
+
 void setup() {
     Serial.begin(115200);
-
-    Serial.println("BOOT: started");
-    Serial.flush();
-    print_memory("serial ready");
-
-    if (!SPIFFS.begin(false)) {
-        Serial.println("BOOT: SPIFFS Mount Failed. Filesystem was not formatted.");
+    Wire.begin(kSdaPin, kSclPin);
+    if (!pca9685.begin()) {
+        Serial.println("BOOT: PCA9685 not found at 0x40.");
         return;
     }
-    Serial.printf("BOOT: SPIFFS mounted, total=%u used=%u\n",
-                  (unsigned int)SPIFFS.totalBytes(),
-                  (unsigned int)SPIFFS.usedBytes());
-    print_memory("SPIFFS ready");
-
-    if (!load_model_from_spiffs("/stories260K.bin")) {
-        Serial.println("BOOT: Model load failed.");
-        return;
-    }
-    Serial.println("BOOT: model loaded");
-    print_memory("model loaded");
-
-    if (!build_tokenizer(&tokenizer, "/tok512.bin", config.vocab_size)) {
-        Serial.println("BOOT: Tokenizer load failed.");
-        return;
-    }
-    Serial.println("BOOT: tokenizer loaded");
-    print_memory("tokenizer loaded");
-
-    if (!malloc_run_state(&state, &config)) {
-        Serial.println("BOOT: runtime allocation failed.");
-        return;
-    }
+    pca9685.setPWMFreq(50);
+    delay(10);
+    pca9685_ready = true;
+    write_servo_angle(kLeftArmServoChannel, 90);
+    write_servo_angle(kRightArmServoChannel, 90);
+    write_servo_angle(kHeadServoChannel, 90);
+    Serial.println("BOOT: PCA9685 ready.");
+    if (!initialize_intent_classifier()) { Serial.println("BOOT: classifier initialization failed."); return; }
+    if (!SPIFFS.begin(false)) { Serial.println("BOOT: SPIFFS mount failed."); return; }
+    if (!load_model_from_spiffs("/stories260K.bin") || !build_tokenizer(&tokenizer, "/tok512.bin", config.vocab_size) ||
+        !malloc_run_state(&state, &config)) { Serial.println("BOOT: story model initialization failed."); return; }
     model_loaded = true;
-    Serial.println("BOOT: Ready. Type a prompt and hit enter.");
-    print_memory("ready");
+    Serial.println("BOOT: Ready. Send a command, PLAN line, or story request.");
 }
 
 void loop() {
-    if (!model_loaded) {
-        return;
+    process_command_queue();
+    String command;
+    if (!read_serial_command(&command)) return;
+    if (command.startsWith("PLAN ")) { Serial.println(parse_plan(command) ? "Plan accepted" : "Plan rejected"); return; }
+    if (is_story_request(command) || command.equalsIgnoreCase("story")) {
+        generate_story(kStoryStarters[esp_random() % STORY_STARTER_COUNT]); return;
     }
-
-    if (Serial.available() > 0) {
-        String prompt = Serial.readStringUntil('\n');
-        prompt.trim();
-
-        if (prompt.length() > 0) {
-            Serial.printf("\nPrompt: %s\n", prompt.c_str());
-
-            size_t prompt_capacity = prompt.length() + 3;
-            char* prompt_buf = (char*)malloc(prompt_capacity);
-            int* token_ids = (int*)malloc(prompt_capacity * sizeof(int));
-            if (!prompt_buf || !token_ids) {
-                Serial.println("Prompt allocation failed.");
-                free(prompt_buf);
-                free(token_ids);
-                return;
-            }
-            prompt.toCharArray(prompt_buf, prompt_capacity);
-            int n_tokens = 0;
-            encode(&tokenizer, prompt_buf, 1, 0, token_ids, &n_tokens);
-
-            if (n_tokens > config.seq_len) {
-                Serial.printf("Prompt is too long (%d tokens, max %d).\n", n_tokens, config.seq_len);
-                free(prompt_buf);
-                free(token_ids);
-                return;
-            }
-
-            Sampler sampler;
-            sampler.temperature = 0.8f;
-            sampler.topp = 0.9f;
-            sampler.vocab_size = config.vocab_size;
-            sampler.probindex = (ProbIndex*)ps_calloc(config.vocab_size, sizeof(ProbIndex));
-            sampler.rng_state = (uint32_t)micros();
-            if (!sampler.probindex) {
-                Serial.println("Sampler allocation failed.");
-                free(prompt_buf);
-                free(token_ids);
-                return;
-            }
-
-            int current_token = token_ids[0];
-            int previous_token = 1;
-            constexpr int max_new_tokens = 128;
-            int total_steps = min(config.seq_len, n_tokens + max_new_tokens);
-            for (int pos = 0; pos < total_steps; pos++) {
-                Transformer model = { config, weights, state, 0, nullptr, 0 };
-                float* logits = forward(&model, current_token, pos);
-                int next = sample(&sampler, logits);
-                if (next < 0 || next >= config.vocab_size) next = 0;
-
-                if (pos >= n_tokens - 1) {
-                    char* piece = decode(&tokenizer, previous_token, next);
-                    Serial.print(piece);
-                    previous_token = next;
-                } else {
-                    previous_token = token_ids[pos];
-                }
-
-                if (pos < n_tokens - 1) {
-                    current_token = token_ids[pos + 1];
-                } else {
-                    current_token = next;
-                }
-
-                if (next == 2) {
-                    break;
-                }
-                yield();
-            }
-
-            Serial.println("\n--- Done ---");
-            free(sampler.probindex);
-            free(prompt_buf);
-            free(token_ids);
-        }
+    if (plan_natural_language(command)) {
+        Serial.printf("Plan accepted: %d command(s) queued\n", queued_command_count);
+    } else {
+        Serial.println("Command rejected: no confident intents");
     }
 }

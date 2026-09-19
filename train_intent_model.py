@@ -12,6 +12,7 @@ Run:     python train_intent_model.py
 from pathlib import Path
 import json
 import re
+import shutil
 
 import numpy as np
 import tensorflow as tf
@@ -23,6 +24,28 @@ EMBEDDING_DIM = 10
 HIDDEN_UNITS = 24
 EPOCHS = 180
 OUTPUT_DIR = Path(__file__).parent / "generated"
+FIRMWARE_OUTPUT_DIR = Path(__file__).parent / "ESP32N32R16V_BOB" / "src" / "generated"
+SUPPORTED_FIRMWARE_OPS = {
+    "GATHER", "MEAN", "FULLY_CONNECTED", "RELU", "SOFTMAX",
+}
+
+
+class TokenLookup(keras.layers.Layer):
+    def __init__(self, vocabulary_size: int, embedding_dim: int, **kwargs):
+        super().__init__(**kwargs)
+        self.vocabulary_size = vocabulary_size
+        self.embedding_dim = embedding_dim
+
+    def build(self, input_shape):
+        self.embedding = self.add_weight(
+            name="embedding",
+            shape=(self.vocabulary_size, self.embedding_dim),
+            initializer="uniform",
+            trainable=True,
+        )
+
+    def call(self, inputs):
+        return tf.gather(self.embedding, inputs)
 
 STORY_STARTERS = [
     "At sunrise, a small robot found a locked door beneath the old garden.",
@@ -209,7 +232,7 @@ def write_metadata_header(vocabulary: dict[str, int], model_path: Path) -> None:
         f"#define INTENT_METADATA_MAX_TOKENS {MAX_TOKENS}",
         f"#define INTENT_METADATA_MODEL_BYTES {model_path.stat().st_size}",
         "#define INTENT_METADATA_INPUT_TYPE_INT32 1",
-        "#define INTENT_METADATA_OUTPUT_TYPE_INT8 1",
+        "#define INTENT_METADATA_OUTPUT_TYPE_FLOAT32 1",
         "",
         "static const char *const kIntentClassNames[INTENT_METADATA_CLASS_COUNT] = {",
     ]
@@ -267,6 +290,23 @@ def report_evaluation(model: keras.Model, x_test: np.ndarray, y_test: np.ndarray
         print(f"  {intent}: precision={precision:.3f} recall={recall:.3f}")
 
 
+def validate_firmware_model(model_content: bytes) -> None:
+    interpreter = tf.lite.Interpreter(model_content=model_content)
+    operators = [details["op_name"] for details in interpreter._get_ops_details()]
+    unsupported = sorted(set(operators) - SUPPORTED_FIRMWARE_OPS)
+    if unsupported:
+        raise ValueError(
+            f"Firmware model contains unsupported operators: {unsupported}; operators={operators}"
+        )
+    print(f"Firmware operators: {', '.join(operators)}")
+
+
+def copy_firmware_headers() -> None:
+    FIRMWARE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    for filename in ("model_data.h", "vocab.h", "model_metadata.h"):
+        shutil.copy2(OUTPUT_DIR / filename, FIRMWARE_OUTPUT_DIR / filename)
+
+
 def main() -> None:
     np.random.seed(SEED)
     tf.random.set_seed(SEED)
@@ -287,7 +327,7 @@ def main() -> None:
 
     model = keras.Sequential([
         keras.layers.Input(shape=(MAX_TOKENS,), dtype="int32"),
-        keras.layers.Embedding(len(vocabulary), EMBEDDING_DIM, mask_zero=False),
+        TokenLookup(len(vocabulary), EMBEDDING_DIM),
         keras.layers.GlobalAveragePooling1D(),
         keras.layers.Dense(HIDDEN_UNITS, activation="relu"),
         keras.layers.Dense(len(INTENTS), activation="softmax"),
@@ -314,16 +354,16 @@ def main() -> None:
             yield [row[np.newaxis, :].astype(np.int32)]
 
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
-    converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    converter.representative_dataset = representative_dataset
-    # Embedding indices remain int32 automatically; TensorFlow 2.21 rejects
-    # explicitly assigning int32 to inference_input_type.
-    converter.inference_output_type = tf.int8
+    # Keep the Embedding input as int32. Full integer output quantization adds
+    # LESS/ADD/SELECT_V2 nodes that the bundled ESP32 Micro runtime cannot run.
+    # Float output is supported by the firmware and keeps the graph portable.
     tflite_model = converter.convert()
+    validate_firmware_model(tflite_model)
     model_path = OUTPUT_DIR / "intent_model.tflite"
     model_path.write_bytes(tflite_model)
     write_model_header(model_path)
     write_metadata_header(vocabulary, model_path)
+    copy_firmware_headers()
 
     interpreter = tf.lite.Interpreter(model_content=tflite_model)
     interpreter.allocate_tensors()
