@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-#define INTENT_VOCAB_SIZE 96
+#define INTENT_VOCAB_SIZE 104
 #define INTENT_MAX_TOKENS 8
 #define INTENT_PAD_ID 0
 #define INTENT_UNK_ID 1
@@ -17,6 +17,9 @@ static const char *const kIntentVocabulary[INTENT_VOCAB_SIZE] = {
     "arm",
     "back",
     "backward",
+    "backword",
+    "bakward",
+    "bakword",
     "begin",
     "bob",
     "body",
@@ -35,6 +38,7 @@ static const char *const kIntentVocabulary[INTENT_VOCAB_SIZE] = {
     "for",
     "forth",
     "forward",
+    "forword",
     "freeze",
     "from",
     "give",
@@ -47,6 +51,7 @@ static const char *const kIntentVocabulary[INTENT_VOCAB_SIZE] = {
     "hold",
     "immediately",
     "in",
+    "lef",
     "left",
     "leftward",
     "lift",
@@ -66,6 +71,7 @@ static const char *const kIntentVocabulary[INTENT_VOCAB_SIZE] = {
     "perform",
     "place",
     "please",
+    "pleese",
     "point",
     "position",
     "put",
@@ -73,6 +79,7 @@ static const char *const kIntentVocabulary[INTENT_VOCAB_SIZE] = {
     "reverse",
     "right",
     "rightward",
+    "rite",
     "rotate",
     "routine",
     "say",
@@ -92,6 +99,7 @@ static const char *const kIntentVocabulary[INTENT_VOCAB_SIZE] = {
     "travel",
     "turn",
     "twice",
+    "uh",
     "up",
     "upward",
     "upwards",

@@ -632,9 +632,12 @@ bool model_loaded = false;
 
 namespace {
 constexpr int kIntentCount = INTENT_METADATA_CLASS_COUNT;
-constexpr int kMaxQueuedCommands = 8;
+constexpr int kMaxQueuedCommands = 16;
 constexpr float kIntentThreshold = 0.55f;
 constexpr size_t kTensorArenaSize = 256 * 1024;
+constexpr int kWaitCommandId = -1;
+constexpr uint32_t kDefaultSequenceWaitMs = 300;
+constexpr uint32_t kMaxWaitMs = 30000;
 
 constexpr uint8_t kPca9685Address = 0x40;
 constexpr uint8_t kSdaPin = 14;
@@ -664,12 +667,25 @@ MotorCommand command_queue[kMaxQueuedCommands];
 int queue_head = 0;
 int queue_tail = 0;
 int queued_command_count = 0;
+uint32_t next_command_at = 0;
 
 int lookup_intent_token(const char* word) {
     for (int id = 0; id < INTENT_VOCAB_SIZE; ++id) {
         if (strcmp(word, kIntentVocabulary[id]) == 0) return id;
     }
     return INTENT_UNK_ID;
+}
+
+static String normalize_transcript(const String& raw_text) {
+    String normalized = raw_text;
+    normalized.toLowerCase();
+    normalized.replace("lef", "left");
+    normalized.replace("rite", "right");
+    normalized.replace("bakward", "backward");
+    normalized.replace("bakword", "backward");
+    normalized.replace("forword", "forward");
+    normalized.replace("pleese", "please");
+    return normalized;
 }
 
 void tokenize_intent(const String& text, TfLiteTensor* input) {
@@ -754,12 +770,13 @@ float intent_output_value(int index) {
 }
 
 int classify_intent(const String& text, float* confidence) {
-    int rule_intent = rule_based_intent(text);
+    String normalized = normalize_transcript(text);
+    int rule_intent = rule_based_intent(normalized);
     if (rule_intent >= 0) {
         *confidence = 1.0f;
         return rule_intent;
     }
-    tokenize_intent(text, intent_input);
+    tokenize_intent(normalized, intent_input);
     if (intent_interpreter->Invoke() != kTfLiteOk) {
         *confidence = 0.0f;
         return -1;
@@ -880,6 +897,10 @@ static void write_servo_angle(uint8_t channel, int angle) {
 static void clearCommandQueue();
 
 static void dispatch_motor_command(int intent_id, int value, uint32_t duration_ms) {
+    if (intent_id == kWaitCommandId) {
+        Serial.printf("WAIT duration=%lu ms\n", static_cast<unsigned long>(duration_ms));
+        return;
+    }
     Serial.printf("CASE %d: %s value=%d duration=%lu\n", intent_id,
                   kIntentClassNames[intent_id], value,
                   static_cast<unsigned long>(duration_ms));
@@ -923,13 +944,53 @@ static void dispatch_motor_command(int intent_id, int value, uint32_t duration_m
     }
 }
 
-static void clearCommandQueue() { queue_head = queue_tail = queued_command_count = 0; }
+static void clearCommandQueue() {
+    queue_head = queue_tail = queued_command_count = 0;
+    next_command_at = 0;
+}
 
 static bool enqueue_command(int intent_id, int value, uint32_t duration_ms) {
     if (queued_command_count >= kMaxQueuedCommands || duration_ms == 0) return false;
     command_queue[queue_tail] = {intent_id, constrain(value, 0, 180), duration_ms};
     queue_tail = (queue_tail + 1) % kMaxQueuedCommands;
     ++queued_command_count;
+    return true;
+}
+
+static bool parse_wait_duration(const String& raw_text, uint32_t* duration_ms) {
+    String text = raw_text;
+    text.trim();
+    text.toLowerCase();
+    if (text.startsWith("please ")) text.remove(0, 7);
+    bool is_wait = text.startsWith("wait") || text.startsWith("pause");
+    if (!is_wait) return false;
+    int keyword_length = text.startsWith("wait") ? 4 : 5;
+    if (text.length() > keyword_length && text[keyword_length] != ' ') return false;
+    String argument = text.substring(keyword_length);
+    argument.trim();
+    if (argument.length() == 0) {
+        *duration_ms = kDefaultSequenceWaitMs;
+        return true;
+    }
+    if (argument == "a little" || argument == "little") {
+        *duration_ms = 300;
+        return true;
+    }
+    if (argument == "a lot" || argument == "lot") {
+        *duration_ms = 2000;
+        return true;
+    }
+    int split = 0;
+    while (split < static_cast<int>(argument.length()) &&
+           (isDigit(argument[split]) || argument[split] == '.')) ++split;
+    if (split == 0) return false;
+    float amount = argument.substring(0, split).toFloat();
+    String unit = argument.substring(split);
+    unit.trim();
+    bool seconds = unit.startsWith("s") || (unit.length() == 0 && amount < 20.0f);
+    if (seconds) amount *= 1000.0f;
+    if (amount <= 0.0f) return false;
+    *duration_ms = min(static_cast<uint32_t>(amount + 0.5f), kMaxWaitMs);
     return true;
 }
 
@@ -957,6 +1018,18 @@ static int next_sequence_separator(const String& text, int* separator_length) {
             *separator_length = strlen(separators[i]);
         }
     }
+    const char* command_starts[] = {
+        "turn ", "go ", "move ", "walk ", "drive ", "rotate ", "look ",
+        "tilt ", "shake ", "nod ", "dance", "stop", "wait ", "pause "
+    };
+    const int command_start_count = sizeof(command_starts) / sizeof(command_starts[0]);
+    for (int i = 0; i < command_start_count; ++i) {
+        int position = lowered.indexOf(String(" ") + command_starts[i], 1);
+        if (position >= 0 && (best_position < 0 || position < best_position)) {
+            best_position = position;
+            *separator_length = 1;
+        }
+    }
     return best_position;
 }
 
@@ -964,6 +1037,8 @@ static bool plan_natural_language(const String& raw_text) {
     clearCommandQueue();
     String remaining = raw_text;
     int accepted_commands = 0;
+    bool have_element = false;
+    bool previous_was_wait = false;
 
     while (remaining.length() > 0 && accepted_commands < kMaxQueuedCommands) {
         int separator_length = 0;
@@ -973,8 +1048,18 @@ static bool plan_natural_language(const String& raw_text) {
         segment.trim();
         if (segment.length() == 0) continue;
 
-        String lowered = segment;
-        lowered.toLowerCase();
+        String lowered = normalize_transcript(segment);
+        uint32_t explicit_wait_ms = 0;
+        if (parse_wait_duration(segment, &explicit_wait_ms)) {
+            if (!enqueue_command(kWaitCommandId, 0, explicit_wait_ms)) {
+                clearCommandQueue();
+                return false;
+            }
+            ++accepted_commands;
+            have_element = true;
+            previous_was_wait = true;
+            continue;
+        }
         int arm_intent = lowered.indexOf("left") >= 0 ? 1 :
                          lowered.indexOf("right") >= 0 ? 2 : -1;
         if (lowered.indexOf("wave") >= 0 && arm_intent >= 0) {
@@ -984,6 +1069,8 @@ static bool plan_natural_language(const String& raw_text) {
                 return false;
             }
             accepted_commands += 2;
+            have_element = true;
+            previous_was_wait = false;
             continue;
         }
 
@@ -1002,8 +1089,14 @@ static bool plan_natural_language(const String& raw_text) {
                 lowered.indexOf("drop") >= 0) value = 20;
         }
         uint32_t duration = lowered.indexOf("little") >= 0 || lowered.indexOf("slightly") >= 0 ? 300 : 500;
+        if (have_element && !previous_was_wait &&
+            !enqueue_command(kWaitCommandId, 0, kDefaultSequenceWaitMs)) {
+            break;
+        }
         if (!enqueue_command(intent, value, duration)) break;
         ++accepted_commands;
+        have_element = true;
+        previous_was_wait = false;
         if (intent == 12) break;
     }
     return queued_command_count > 0;
@@ -1018,8 +1111,17 @@ static bool parse_plan(String plan) {
         item.trim();
         int first = item.indexOf(','); int second = item.indexOf(',', first + 1);
         if (first < 1 || second < 0) { clearCommandQueue(); return false; }
+        String intent_name = item.substring(0, first);
+        if (intent_name.equals("WAIT")) {
+            uint32_t wait_ms = static_cast<uint32_t>(item.substring(second + 1).toInt());
+            if (!enqueue_command(kWaitCommandId, 0, min(wait_ms, kMaxWaitMs))) {
+                clearCommandQueue();
+                return false;
+            }
+            continue;
+        }
         int intent = -1;
-        for (int i = 0; i < kIntentCount; ++i) if (item.substring(0, first).equals(kIntentClassNames[i])) intent = i;
+        for (int i = 0; i < kIntentCount; ++i) if (intent_name.equals(kIntentClassNames[i])) intent = i;
         uint32_t duration = static_cast<uint32_t>(item.substring(second + 1).toInt());
         if (intent < 0 || !enqueue_command(intent, item.substring(first + 1, second).toInt(), duration)) {
             clearCommandQueue(); return false;
@@ -1030,10 +1132,17 @@ static bool parse_plan(String plan) {
 }
 
 static void process_command_queue() {
-    if (queued_command_count == 0) return;
+    if (queued_command_count == 0 || (next_command_at != 0 && millis() < next_command_at)) return;
     MotorCommand command = command_queue[queue_head];
     queue_head = (queue_head + 1) % kMaxQueuedCommands; --queued_command_count;
     dispatch_motor_command(command.intent_id, command.value, command.duration_ms);
+    if (command.intent_id == kWaitCommandId) {
+        next_command_at = millis() + command.duration_ms;
+    } else if (queued_command_count > 0) {
+        next_command_at = millis() + kDefaultSequenceWaitMs;
+    } else {
+        next_command_at = 0;
+    }
 }
 
 static bool read_serial_command(String* command) {

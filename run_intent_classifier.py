@@ -35,11 +35,21 @@ INTENTS = (
 WORD_PATTERN = re.compile(r"[a-z0-9]+")
 VOCAB_ENTRY_PATTERN = re.compile(r'^\s*"([^"\\]*)",\s*$')
 NUMBER_PATTERN = re.compile(r"\b(\d+(?:\.\d+)?)\s*(?:degrees?|deg)?\b")
-SEQUENCE_SPLIT_PATTERN = re.compile(r"\s*(?:,|;|\band then\b|\band\b|\bthen\b)\s*", re.IGNORECASE)
+WAIT_PATTERN = re.compile(
+    r"^(?:please\s+)?(?:wait|pause)(?:\s+(?P<amount>\d+(?:\.\d+)?)\s*(?P<unit>milliseconds?|ms|seconds?|secs?|s)?|\s+(?P<preset>a little|a lot))?\s*$",
+    re.IGNORECASE,
+)
+SEQUENCE_SPLIT_PATTERN = re.compile(
+    r"\s*(?:,|;|\band then\b|\band\b|\bthen\b)\s*|"
+    r"\s+(?=(?:turn|go|move|walk|drive|rotate|look|tilt|shake|nod|dance|stop|wait|pause)\b)",
+    re.IGNORECASE,
+)
 STORY_REQUEST_PATTERN = re.compile(
     r"\b(?:tell|read|make|write|start|give)\b.*\b(?:story|tale)\b|\b(?:story|tale)\b.*\b(?:please|now)\b",
     re.IGNORECASE,
 )
+DEFAULT_WAIT_MS = 300
+MAX_WAIT_MS = 30_000
 
 
 @dataclass
@@ -51,8 +61,44 @@ class MotorCommand:
     source: str = ""
 
 
+def parse_wait_duration(text: str) -> int | None:
+    match = WAIT_PATTERN.match(text.strip())
+    if not match:
+        return None
+    preset = (match.group("preset") or "").strip().lower()
+    if preset == "a little":
+        return 300
+    if preset == "a lot":
+        return 2_000
+    amount_text = match.group("amount")
+    if amount_text is None:
+        return DEFAULT_WAIT_MS
+    amount = float(amount_text)
+    unit = (match.group("unit") or "").lower()
+    if unit.startswith("s") or (not unit and amount < 20):
+        amount *= 1_000
+    duration_ms = int(round(amount))
+    return min(max(duration_ms, 0), MAX_WAIT_MS)
+
+
+def normalize_transcript(text: str) -> str:
+    replacements = {
+        "lef": "left",
+        "rite": "right",
+        "bakward": "backward",
+        "bakword": "backward",
+        "forword": "forward",
+        "pleese": "please",
+    }
+    words = text.lower().split()
+    return " ".join(replacements.get(word.strip(".,!?;:"), word.strip(".,!?;:")) for word in words)
+
+
 def command_for_segment(classifier: "IntentClassifier", segment: str) -> list[MotorCommand]:
     lowered = segment.lower()
+    wait_duration = parse_wait_duration(segment)
+    if wait_duration is not None:
+        return [MotorCommand("WAIT", 0.0, wait_duration, 1.0, segment)]
     arm_intent = "LEFT_ARM" if "left" in lowered else "RIGHT_ARM" if "right" in lowered else None
     if "wave" in lowered and arm_intent is not None:
         return [
@@ -138,8 +184,9 @@ class IntentClassifier:
             raise ValueError(f"Unexpected model output contract: {output_shape}")
 
     def classify(self, text: str) -> tuple[str, float, list[str]]:
-        words = tokenize(text)
-        rule_intent = rule_based_intent(text)
+        normalized = normalize_transcript(text)
+        words = tokenize(normalized)
+        rule_intent = rule_based_intent(normalized)
         if rule_intent is not None:
             return rule_intent, 1.0, words
         token_ids = [self.vocabulary.get(word, 1) for word in words[:8]]
@@ -208,9 +255,7 @@ def print_plan(classifier: IntentClassifier, text: str, threshold: float) -> Non
 
 def print_esp_plan(classifier: IntentClassifier, text: str, threshold: float) -> None:
     commands = classifier.plan(text, threshold=threshold)
-    wire_commands = ";".join(
-        f"{command.intent},{round(command.value):d},{command.duration_ms}" for command in commands
-    )
+    wire_commands = ";".join(f"{command.intent},{round(command.value):d},{command.duration_ms}" for command in commands)
     print(f"PLAN {wire_commands}")
 
 

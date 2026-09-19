@@ -85,26 +85,31 @@ TRAIN_DATASET = {
         "bring your arm higher", "raise your hand up", "put arm up",
         "can you lift your arm", "move the arm upwards", "arm raise",
         "please move arm up", "up with your arm", "elevate your arm",
+        "uh raise the arm", "arm up please please", "lift arm higher now",
     ],
     "LEFT_ARM": [
         "move your left arm", "left arm", "use the left arm", "raise left arm",
         "wave left arm", "left hand movement", "move arm on the left",
         "please move your left arm", "left arm forward", "left arm action",
+        "move lef arm", "left arm please move", "uh move arm on left",
     ],
     "RIGHT_ARM": [
         "move your right arm", "right arm", "use the right arm", "raise right arm",
         "wave right arm", "right hand movement", "move arm on the right",
         "please move your right arm", "right arm forward", "right arm action",
+        "move rite arm", "right arm please move", "uh move arm on right",
     ],
     "MOVE_FORWARD": [
         "move forward", "go forward", "walk forward", "drive forward",
         "go straight", "move ahead", "forward movement", "head forward",
         "please move forward", "go straight ahead",
+        "uh go forword", "move forword please", "go straight now now",
     ],
     "MOVE_BACKWARD": [
         "move backward", "go backward", "walk backward", "drive backward",
         "go back", "move in reverse", "reverse movement", "back up",
         "please move backward", "go straight back",
+        "uh go bakward", "move backword please", "reverse now now",
     ],
     "HEAD_SHAKE": [
         "shake your head", "shake head", "move head side to side",
@@ -118,7 +123,7 @@ TRAIN_DATASET = {
         "say yes", "head nod", "bob your head", "move head vertically",
         "please nod your head", "make a yes motion", "head up and down",
         "nod your head twice", "bob head up down", "nod forward and back",
-        "nod", "nod please", "give a nod",
+        "nod", "nod please", "give a nod", "uh nod your head", "nod nod please",
     ],
     "HEAD_LEFT": [
         "move head left", "turn head left", "look left", "head to the left",
@@ -135,12 +140,14 @@ TRAIN_DATASET = {
         "move left", "turn your body left", "please turn to the left",
         "take a left", "head toward the left", "left turn now",
         "rotate your body left", "go left please", "make a left turn",
+        "uh turn lef", "turn lef please", "go to the lef",
     ],
     "TURN_RIGHT": [
         "turn right", "rotate right", "go to the right", "steer right",
         "move right", "turn your body right", "please turn to the right",
         "take a right", "head toward the right", "right turn now",
         "rotate your body right", "go right please", "make a right turn",
+        "uh turn rite", "turn rite please", "go to the rite",
     ],
     "DANCE": [
         "dance", "start dancing", "do a dance", "dance routine", "make a dance",
@@ -151,25 +158,26 @@ TRAIN_DATASET = {
         "stop moving", "emergency stop", "please stop", "stop right now",
         "cease movement", "hold position", "do not move now",
         "bring everything to a stop", "stop immediately",
+        "uh stop now", "pleese stop", "stop stop please",
     ],
 }
 
 # These are not used for fitting. They test paraphrases and short commands that
 # do not occur verbatim in TRAIN_DATASET.
 TEST_DATASET = {
-    "ARM_UP": ["lift your arm higher", "raise the hand", "arm move upward", "move arm high"],
-    "LEFT_ARM": ["move the arm on your left", "left hand please", "wave with left arm", "left arm move"],
-    "RIGHT_ARM": ["move the arm on your right", "right hand please", "wave with right arm", "right arm move"],
-    "MOVE_FORWARD": ["travel ahead", "move straight", "forward please", "go onward"],
-    "MOVE_BACKWARD": ["travel back", "reverse direction", "backward please", "reverse now"],
+    "ARM_UP": ["lift your arm higher", "raise the hand", "arm move upward", "move arm high", "can you lift arm now"],
+    "LEFT_ARM": ["move the arm on your left", "left hand please", "wave with left arm", "left arm move", "move the lef hand"],
+    "RIGHT_ARM": ["move the arm on your right", "right hand please", "wave with right arm", "right arm move", "move the rite hand"],
+    "MOVE_FORWARD": ["travel ahead", "move straight", "forward please", "go onward", "go forword now"],
+    "MOVE_BACKWARD": ["travel back", "reverse direction", "backward please", "reverse now", "go bakword please"],
     "HEAD_SHAKE": ["shake from left to right", "move head left right", "move head back and forth", "head shake please"],
     "HEAD_NOD": ["nod head up and down", "move the head up down", "head bob twice", "nod forward"],
     "HEAD_LEFT": ["look toward the left", "head point left", "leftward head", "turn head toward left"],
     "HEAD_RIGHT": ["look toward the right", "head point right", "rightward head", "turn head toward right"],
-    "TURN_LEFT": ["make the body turn left", "move your body left", "leftward move", "steer to the left"],
-    "TURN_RIGHT": ["make the body turn right", "move your body right", "rightward move", "steer to the right"],
+    "TURN_LEFT": ["make the body turn left", "move your body left", "leftward move", "steer to the left", "turn lef now"],
+    "TURN_RIGHT": ["make the body turn right", "move your body right", "rightward move", "steer to the right", "turn rite now"],
     "DANCE": ["do some dancing", "perform a routine", "dance for me", "start a dance"],
-    "STOP": ["stop moving immediately", "freeze and hold", "stop all movement", "freeze in place"],
+    "STOP": ["stop moving immediately", "freeze and hold", "stop all movement", "freeze in place", "pleese halt now"],
 }
 
 

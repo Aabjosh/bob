@@ -2,7 +2,13 @@
 
 from pathlib import Path
 
-from run_intent_classifier import IntentClassifier, choose_story_starter, is_story_request, load_story_starters
+from run_intent_classifier import (
+    IntentClassifier,
+    choose_story_starter,
+    is_story_request,
+    load_story_starters,
+    parse_wait_duration,
+)
 
 MODEL = Path(__file__).parent / "generated" / "intent_model.tflite"
 VOCAB = Path(__file__).parent / "generated" / "vocab.h"
@@ -57,6 +63,28 @@ SEQUENCE_CASES = [
     (["RIGHT_ARM", "HEAD_NOD", "STOP"], "right arm and nod, then stop"),
     (["MOVE_BACKWARD", "TURN_RIGHT"], "go back; rotate right"),
     (["HEAD_LEFT", "HEAD_RIGHT", "DANCE"], "look left then look right and dance"),
+    (["TURN_LEFT", "TURN_RIGHT", "MOVE_FORWARD"], "turn left turn right go forward"),
+    (["TURN_LEFT", "WAIT", "TURN_RIGHT"], "turn left, wait 2 seconds, turn right"),
+]
+
+NOISY_CASES = [
+    ("LEFT_ARM", "uh move the lef arm please"),
+    ("RIGHT_ARM", "move the rite arm now"),
+    ("MOVE_FORWARD", "go forword please"),
+    ("MOVE_BACKWARD", "uh go bakword"),
+    ("TURN_LEFT", "turn lef now"),
+    ("TURN_RIGHT", "please turn rite"),
+    ("STOP", "pleese stop now"),
+]
+
+WAIT_CASES = [
+    (300, "wait"),
+    (2000, "wait 2"),
+    (500, "wait 500"),
+    (2000, "wait 2 seconds"),
+    (500, "pause 500 ms"),
+    (300, "wait a little"),
+    (2000, "pause a lot"),
 ]
 
 # Canonical natural phrases used to exercise every ordered pair. STOP is a
@@ -136,6 +164,20 @@ def main() -> int:
         print(f"{status} expected={expected} actual={actual} text={text!r}")
         failures += actual != expected
 
+    print(f"\nNoisy transcript cases: {len(NOISY_CASES)}")
+    for expected, text in NOISY_CASES:
+        actual, confidence, _ = classifier.classify(text)
+        status = "PASS" if actual == expected else "FAIL"
+        print(f"{status} expected={expected:<14} actual={actual:<14} confidence={confidence:.3f} text={text!r}")
+        failures += actual != expected
+
+    print(f"\nWait cases: {len(WAIT_CASES)}")
+    for expected, text in WAIT_CASES:
+        actual = parse_wait_duration(text)
+        status = "PASS" if actual == expected else "FAIL"
+        print(f"{status} expected={expected} actual={actual} text={text!r}")
+        failures += actual != expected
+
     print(f"\nOrdered pair cases: {len(PAIR_CASES)}")
     for expected, text in PAIR_CASES:
         actual = [command.intent for command in classifier.plan(text)]
@@ -171,7 +213,8 @@ def main() -> int:
         print(f"{status} expected={(expected_value, expected_duration)} actual={actual_values} text={text!r}")
         failures += not passed
 
-    total = len(STORY_CASES) + len(SINGLE_CASES) + len(SEQUENCE_CASES) + len(PAIR_CASES) + len(HUMAN_CASES) + len(PARAMETER_CASES)
+    total = (len(STORY_CASES) + len(SINGLE_CASES) + len(SEQUENCE_CASES) + len(PAIR_CASES) +
+             len(NOISY_CASES) + len(WAIT_CASES) + len(HUMAN_CASES) + len(PARAMETER_CASES))
     print(f"\nResult: {total - failures}/{total} passed")
     return 1 if failures else 0
 

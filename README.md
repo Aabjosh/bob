@@ -23,7 +23,7 @@ The script creates `generated/intent_model.tflite`, `generated/model_data.h`,
 `generated/vocab.h`, and `generated/model_metadata.h`. It writes the model byte
 array itself, so `xxd` is optional.
 The conversion keeps the input as `int32` token IDs (required by the Embedding
-layer) and exports the output as quantized `int8` scores. The script prints the
+layer) and exports the output as `float32` scores. The script prints the
 actual TensorFlow Lite tensor types, dimensions, held-out accuracy, confusion
 matrix, and model size after conversion.
 
@@ -33,11 +33,11 @@ Rerun it whenever the command vocabulary changes. Copy the complete `generated`
 directory to the Arduino sketch directory; it is intentionally generated rather
 than checked in.
 
-The current training run uses 129 training phrases, 25 validation phrases, and
-52 held-out test phrases. On the development machine it produced a 5,952-byte
-TFLite model with 95 vocabulary entries, `int32[1,8]` input, and `int8[1,13]`
-output. Held-out accuracy was 76.9%; expand the per-intent phrase lists before
-relying on this model for safety-critical motion.
+The current training run includes noisy transcript variants and produces a model
+with `int32[1,8]` input, 13 classes, and `float32[1,13]` output. Common speech
+recognition misspellings such as `lef`, `rite`, `bakword`, and `forword` are
+normalized before inference. Keep adding field phrases to the held-out tests
+before relying on this model for safety-critical motion.
 
 ## 2. Build the firmware
 
@@ -69,7 +69,7 @@ dimensions at boot, then rejects predictions below 0.55 confidence.
 | Input | `int32[1][8]` token IDs |
 | Vocabulary | Generated `vocab.h`, ID 0 is PAD, ID 1 is UNK |
 | Network | Embedding(10) -> GlobalAveragePooling1D -> Dense(24, ReLU) -> Dense(13, softmax) |
-| Output | Six quantized `int8` scores, dequantized using the tensor scale/zero point |
+| Output | `float32[1][13]` intent scores |
 | Runtime arena | 256 KiB, PSRAM first |
 
 ## Laptop prompt runner
@@ -104,7 +104,8 @@ The sketch prints the selected intent and confidence, then dispatches the servo
 macro only when confidence is at least `0.55`. Serial intake is nonblocking and
 bounded to 128 characters, so incomplete input does not pause the main loop.
 
-For a sequence, use the laptop runner's ESP format:
+For a sequence, the ESP32 can plan natural-language text directly. It also
+accepts the laptop runner's ESP format:
 
 ```text
 .venv\Scripts\python.exe run_intent_classifier.py --esp-plan --text "Move your left arm and then shake your head"
@@ -113,13 +114,19 @@ For a sequence, use the laptop runner's ESP format:
 Copy the resulting line into the serial monitor:
 
 ```text
-PLAN LEFT_ARM,90,500;HEAD_SHAKE,90,500
+PLAN LEFT_ARM,90,500;WAIT,0,1000;HEAD_SHAKE,90,500
 ```
 
-The ESP32 accepts up to eight commands per plan. Each item is
-`INTENT,value,duration_ms`; values are clamped to 0-180. `STOP` clears future
-execution only when sent as a new plan; motor safety logic should also be wired
-to a physical emergency-stop path.
+Each item is `INTENT,value,duration_ms`; values are clamped to 0-180. `WAIT`
+is a planner command, not a learned intent. The ESP32 inserts a default 300 ms
+gap between commands, without adding a gap after the final command. Explicit
+waits can be written as `wait 2 seconds`, `wait 500 ms`, `wait 2`, `wait 500`,
+`wait a little`, or `wait a lot`. Bare values below 20 are seconds; values 20
+or greater are milliseconds. Waits are capped at 30 seconds.
+
+Future audio-to-text software can pass its generated transcript into the same
+text command path; audio capture and speech recognition are not part of this
+firmware.
 
 The laptop planner understands explicit values such as `turn left 45 degrees`,
 and presets such as `a little` (30), default (90), and `a lot` (150). These are
