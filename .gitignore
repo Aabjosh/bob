@@ -1,3 +1,23 @@
 .venv
 .env
 .vscode
+# PlatformIO local build artifacts and environments
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VS Code specific files (optional but highly recommended)
+.vscode/.browse.VC.db
+.vscode/.cppproperties.json
+.vscode/.launch.json
+.vscode/c_cpp_properties.json
+.vscode/ipch/
+
+# Custom binary outputs
+*.bin
+*.elf
+*.hex
+
+# Operating system files
+.DS_Store
+Thumbs.db

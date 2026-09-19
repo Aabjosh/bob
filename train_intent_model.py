@@ -10,6 +10,7 @@ Run:     python train_intent_model.py
 """
 
 from pathlib import Path
+import json
 import re
 
 import numpy as np
@@ -18,17 +19,37 @@ from tensorflow import keras
 
 SEED = 7
 MAX_TOKENS = 8
-EMBEDDING_DIM = 8
-HIDDEN_UNITS = 16
-EPOCHS = 120
+EMBEDDING_DIM = 10
+HIDDEN_UNITS = 24
+EPOCHS = 180
 OUTPUT_DIR = Path(__file__).parent / "generated"
+
+STORY_STARTERS = [
+    "At sunrise, a small robot found a locked door beneath the old garden.",
+    "The map began to glow when the explorers reached the silent mountain.",
+    "On the first night of the storm, a blue light appeared in the forest.",
+    "A curious child discovered a tiny machine that could remember forgotten dreams.",
+    "The village clock stopped at midnight, and every shadow pointed north.",
+    "Deep under the sea, the crew heard a friendly voice calling their names.",
+    "When the delivery drone took a wrong turn, it found a hidden floating city.",
+    "A paper boat crossed the puddle and returned carrying a message from tomorrow.",
+    "The old lighthouse blinked three times, answering a signal from the stars.",
+    "In the attic, a music box opened a door to a world made of clouds.",
+]
 
 INTENTS = [
     "ARM_UP",
+    "LEFT_ARM",
+    "RIGHT_ARM",
+    "MOVE_FORWARD",
+    "MOVE_BACKWARD",
     "HEAD_SHAKE",
     "HEAD_NOD",
+    "HEAD_LEFT",
+    "HEAD_RIGHT",
     "TURN_LEFT",
     "TURN_RIGHT",
+    "DANCE",
     "STOP",
 ]
 
@@ -42,6 +63,26 @@ TRAIN_DATASET = {
         "can you lift your arm", "move the arm upwards", "arm raise",
         "please move arm up", "up with your arm", "elevate your arm",
     ],
+    "LEFT_ARM": [
+        "move your left arm", "left arm", "use the left arm", "raise left arm",
+        "wave left arm", "left hand movement", "move arm on the left",
+        "please move your left arm", "left arm forward", "left arm action",
+    ],
+    "RIGHT_ARM": [
+        "move your right arm", "right arm", "use the right arm", "raise right arm",
+        "wave right arm", "right hand movement", "move arm on the right",
+        "please move your right arm", "right arm forward", "right arm action",
+    ],
+    "MOVE_FORWARD": [
+        "move forward", "go forward", "walk forward", "drive forward",
+        "go straight", "move ahead", "forward movement", "head forward",
+        "please move forward", "go straight ahead",
+    ],
+    "MOVE_BACKWARD": [
+        "move backward", "go backward", "walk backward", "drive backward",
+        "go back", "move in reverse", "reverse movement", "back up",
+        "please move backward", "go straight back",
+    ],
     "HEAD_SHAKE": [
         "shake your head", "shake head", "move head side to side",
         "say no", "head left right", "turn head back and forth",
@@ -54,6 +95,17 @@ TRAIN_DATASET = {
         "say yes", "head nod", "bob your head", "move head vertically",
         "please nod your head", "make a yes motion", "head up and down",
         "nod your head twice", "bob head up down", "nod forward and back",
+        "nod", "nod please", "give a nod",
+    ],
+    "HEAD_LEFT": [
+        "move head left", "turn head left", "look left", "head to the left",
+        "tilt head left", "point head left", "please look left", "head left",
+        "rotate your head toward the left", "point your head toward left",
+    ],
+    "HEAD_RIGHT": [
+        "move head right", "turn head right", "look right", "head to the right",
+        "tilt head right", "point head right", "please look right", "head right",
+        "rotate your head toward the right", "point your head toward right",
     ],
     "TURN_LEFT": [
         "turn left", "rotate left", "go to the left", "steer left",
@@ -67,6 +119,10 @@ TRAIN_DATASET = {
         "take a right", "head toward the right", "right turn now",
         "rotate your body right", "go right please", "make a right turn",
     ],
+    "DANCE": [
+        "dance", "start dancing", "do a dance", "dance routine", "make a dance",
+        "perform a dance", "dance now", "please dance", "begin dance",
+    ],
     "STOP": [
         "stop", "halt", "freeze", "do not move", "all stop",
         "stop moving", "emergency stop", "please stop", "stop right now",
@@ -79,10 +135,17 @@ TRAIN_DATASET = {
 # do not occur verbatim in TRAIN_DATASET.
 TEST_DATASET = {
     "ARM_UP": ["lift your arm higher", "raise the hand", "arm move upward", "move arm high"],
+    "LEFT_ARM": ["move the arm on your left", "left hand please", "wave with left arm", "left arm move"],
+    "RIGHT_ARM": ["move the arm on your right", "right hand please", "wave with right arm", "right arm move"],
+    "MOVE_FORWARD": ["travel ahead", "move straight", "forward please", "go onward"],
+    "MOVE_BACKWARD": ["travel back", "reverse direction", "backward please", "reverse now"],
     "HEAD_SHAKE": ["shake from left to right", "move head left right", "move head back and forth", "head shake please"],
     "HEAD_NOD": ["nod head up and down", "move the head up down", "head bob twice", "nod forward"],
+    "HEAD_LEFT": ["look toward the left", "head point left", "leftward head", "turn head toward left"],
+    "HEAD_RIGHT": ["look toward the right", "head point right", "rightward head", "turn head toward right"],
     "TURN_LEFT": ["make the body turn left", "move your body left", "leftward move", "steer to the left"],
     "TURN_RIGHT": ["make the body turn right", "move your body right", "rightward move", "steer to the right"],
+    "DANCE": ["do some dancing", "perform a routine", "dance for me", "start a dance"],
     "STOP": ["stop moving immediately", "freeze and hold", "stop all movement", "freeze in place"],
 }
 
@@ -155,6 +218,21 @@ def write_metadata_header(vocabulary: dict[str, int], model_path: Path) -> None:
     (OUTPUT_DIR / "model_metadata.h").write_text("\n".join(lines), encoding="ascii")
 
 
+def write_story_starters_header() -> None:
+    lines = [
+        "#pragma once",
+        "#include <stdint.h>",
+        "",
+        f"#define STORY_STARTER_COUNT {len(STORY_STARTERS)}",
+        "",
+        "static const char *const kStoryStarters[STORY_STARTER_COUNT] = {",
+    ]
+    lines.extend(f'    "{starter}",' for starter in STORY_STARTERS)
+    lines.extend(["};", ""])
+    (OUTPUT_DIR / "story_starters.h").write_text("\n".join(lines), encoding="ascii")
+    (OUTPUT_DIR / "story_starters.json").write_text(json.dumps(STORY_STARTERS, indent=2) + "\n", encoding="ascii")
+
+
 def make_examples(dataset: dict[str, list[str]], vocabulary: dict[str, int]) -> tuple[np.ndarray, np.ndarray]:
     texts = [text for intent in INTENTS for text in dataset[intent]]
     labels = [intent_id for intent_id, intent in enumerate(INTENTS) for _ in dataset[intent]]
@@ -197,6 +275,7 @@ def main() -> None:
 
     vocabulary = build_vocabulary()
     write_vocab_header(vocabulary)
+    write_story_starters_header()
 
     x, y = make_examples(TRAIN_DATASET, vocabulary)
     x_test, y_test = make_examples(TEST_DATASET, vocabulary)
@@ -255,7 +334,7 @@ def main() -> None:
     print(f"Input:  shape={input_info['shape'].tolist()} type={input_info['dtype']}")
     print(f"Output: shape={output_info['shape'].tolist()} type={output_info['dtype']}")
     print(f"Model bytes: {len(tflite_model)}")
-    print(f"Wrote:  {model_path}, {OUTPUT_DIR / 'model_data.h'}, {OUTPUT_DIR / 'vocab.h'}, {OUTPUT_DIR / 'model_metadata.h'}")
+    print(f"Wrote:  {model_path}, {OUTPUT_DIR / 'model_data.h'}, {OUTPUT_DIR / 'vocab.h'}, {OUTPUT_DIR / 'model_metadata.h'}, {OUTPUT_DIR / 'story_starters.h'}")
 
 
 if __name__ == "__main__":

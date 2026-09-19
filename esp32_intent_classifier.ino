@@ -4,15 +4,18 @@
 #include <TensorFlowLite_ESP32.h>
 #include "generated/model_data.h"
 #include "generated/vocab.h"
+#include "generated/story_starters.h"
 
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 
 namespace {
-constexpr int kIntentCount = 6;
+constexpr int kIntentCount = 13;
+constexpr int kMaxQueuedCommands = 8;
 constexpr int kServoFrequency = 50;
 constexpr int kServoResolution = 16;
 constexpr int kArmServoChannel = 0;
@@ -27,8 +30,22 @@ TfLiteTensor *input_tensor = nullptr;
 TfLiteTensor *output_tensor = nullptr;
 
 const char *const kIntentNames[kIntentCount] = {
-    "ARM_UP", "HEAD_SHAKE", "HEAD_NOD", "TURN_LEFT", "TURN_RIGHT", "STOP",
+    "ARM_UP", "LEFT_ARM", "RIGHT_ARM", "MOVE_FORWARD", "MOVE_BACKWARD",
+    "HEAD_SHAKE", "HEAD_NOD", "HEAD_LEFT", "HEAD_RIGHT", "TURN_LEFT",
+    "TURN_RIGHT", "DANCE", "STOP",
 };
+String serial_buffer;
+
+struct MotorCommand {
+  int intent_id;
+  int value;
+  uint32_t duration_ms;
+};
+
+MotorCommand command_queue[kMaxQueuedCommands];
+int queue_head = 0;
+int queue_tail = 0;
+int queued_command_count = 0;
 
 uint8_t *allocateTensorArena() {
   uint8_t *arena = static_cast<uint8_t *>(
@@ -46,6 +63,53 @@ int lookupToken(const char *word) {
     }
   }
   return INTENT_UNK_ID;
+}
+
+int ruleBasedIntent(const String &raw_text) {
+  String lowered = raw_text;
+  lowered.toLowerCase();
+  if (lowered.indexOf("arm") >= 0 && lowered.indexOf("left") >= 0) {
+    return 1;  // LEFT_ARM
+  }
+  if (lowered.indexOf("arm") >= 0 && lowered.indexOf("right") >= 0) {
+    return 2;  // RIGHT_ARM
+  }
+  const bool has_head = lowered.indexOf("head") >= 0;
+  if (has_head && (lowered.indexOf("shake") >= 0 ||
+                   (lowered.indexOf("left") >= 0 && lowered.indexOf("right") >= 0))) {
+    return 5;  // HEAD_SHAKE
+  }
+  if (has_head && (lowered.indexOf("nod") >= 0 || lowered.indexOf("bob") >= 0 ||
+                   lowered.indexOf("yes") >= 0)) {
+    return 6;  // HEAD_NOD
+  }
+  if (has_head && lowered.indexOf("left") >= 0) {
+    return 7;  // HEAD_LEFT
+  }
+  if (has_head && lowered.indexOf("right") >= 0) {
+    return 8;  // HEAD_RIGHT
+  }
+  if (lowered.indexOf("stop") >= 0 || lowered.indexOf("halt") >= 0 ||
+      lowered.indexOf("freeze") >= 0 || lowered.indexOf("hold position") >= 0) {
+    return 12;  // STOP
+  }
+  return -1;
+}
+
+bool isStoryRequest(const String &raw_text) {
+  String lowered = raw_text;
+  lowered.toLowerCase();
+  const bool asks_for_story = lowered.indexOf("story") >= 0 || lowered.indexOf("tale") >= 0;
+  const bool asks_to_generate = lowered.indexOf("tell") >= 0 || lowered.indexOf("read") >= 0 ||
+                                lowered.indexOf("make") >= 0 || lowered.indexOf("write") >= 0 ||
+                                lowered.indexOf("start") >= 0 || lowered.indexOf("give") >= 0;
+  return asks_for_story && asks_to_generate;
+}
+
+void emitRandomStoryStarter() {
+  const uint32_t index = esp_random() % STORY_STARTER_COUNT;
+  Serial.print("STORY_STARTER ");
+  Serial.println(kStoryStarters[index]);
 }
 
 void tokenizeToInput(const String &raw_text, TfLiteTensor *input) {
@@ -84,6 +148,11 @@ float outputProbability(int index) {
 }
 
 int classify(const String &raw_text, float *confidence) {
+  const int rule_intent = ruleBasedIntent(raw_text);
+  if (rule_intent >= 0) {
+    *confidence = 1.0f;
+    return rule_intent;
+  }
   tokenizeToInput(raw_text, input_tensor);
   if (interpreter->Invoke() != kTfLiteOk) {
     Serial.println("Inference failed");
@@ -112,33 +181,66 @@ void writeServoAngle(int channel, int angle) {
   ledcWrite(channel, duty);
 }
 
-void dispatchMotorCommand(int intent_id) {
+void dispatchMotorCommand(int intent_id, int value, uint32_t duration_ms) {
+  const int bounded_value = constrain(value, 0, 180);
   switch (intent_id) {
     case 0:  // ARM_UP
-      writeServoAngle(kArmServoChannel, 160);
+      writeServoAngle(kArmServoChannel, bounded_value);
       Serial.println("ARM_UP");
       break;
-    case 1:  // HEAD_SHAKE
+    case 1:  // LEFT_ARM
+      writeServoAngle(kArmServoChannel, bounded_value);
+      Serial.println("LEFT_ARM");
+      break;
+    case 2:  // RIGHT_ARM
+      writeServoAngle(kArmServoChannel, bounded_value);
+      Serial.println("RIGHT_ARM");
+      break;
+    case 3:  // MOVE_FORWARD
+      writeServoAngle(kTurnServoChannel, 90 + bounded_value / 2);
+      Serial.println("MOVE_FORWARD");
+      break;
+    case 4:  // MOVE_BACKWARD
+      writeServoAngle(kTurnServoChannel, 90 - bounded_value / 2);
+      Serial.println("MOVE_BACKWARD");
+      break;
+    case 5:  // HEAD_SHAKE
       writeServoAngle(kHeadServoChannel, 60);
-      delay(180);
+      delay(duration_ms / 2);
       writeServoAngle(kHeadServoChannel, 120);
       Serial.println("HEAD_SHAKE");
       break;
-    case 2:  // HEAD_NOD
+    case 6:  // HEAD_NOD
       writeServoAngle(kHeadServoChannel, 70);
-      delay(180);
+      delay(duration_ms / 2);
       writeServoAngle(kHeadServoChannel, 110);
       Serial.println("HEAD_NOD");
       break;
-    case 3:  // TURN_LEFT
-      writeServoAngle(kTurnServoChannel, 45);
+    case 7:  // HEAD_LEFT
+      writeServoAngle(kHeadServoChannel, 90 - bounded_value / 2);
+      Serial.println("HEAD_LEFT");
+      break;
+    case 8:  // HEAD_RIGHT
+      writeServoAngle(kHeadServoChannel, 90 + bounded_value / 2);
+      Serial.println("HEAD_RIGHT");
+      break;
+    case 9:  // TURN_LEFT
+      writeServoAngle(kTurnServoChannel, 90 - bounded_value / 2);
       Serial.println("TURN_LEFT");
       break;
-    case 4:  // TURN_RIGHT
-      writeServoAngle(kTurnServoChannel, 135);
+    case 10:  // TURN_RIGHT
+      writeServoAngle(kTurnServoChannel, 90 + bounded_value / 2);
       Serial.println("TURN_RIGHT");
       break;
-    case 5:  // STOP
+    case 11:  // DANCE
+      writeServoAngle(kArmServoChannel, 60);
+      writeServoAngle(kHeadServoChannel, 120);
+      delay(duration_ms / 2);
+      writeServoAngle(kArmServoChannel, 120);
+      writeServoAngle(kHeadServoChannel, 60);
+      Serial.println("DANCE");
+      break;
+    case 12:  // STOP
       writeServoAngle(kArmServoChannel, 90);
       writeServoAngle(kHeadServoChannel, 90);
       writeServoAngle(kTurnServoChannel, 90);
@@ -148,6 +250,90 @@ void dispatchMotorCommand(int intent_id) {
       Serial.println("Unknown intent");
       break;
   }
+}
+
+int intentIdFromName(const String &name) {
+  for (int intent_id = 0; intent_id < kIntentCount; ++intent_id) {
+    if (name.equals(kIntentNames[intent_id])) {
+      return intent_id;
+    }
+  }
+  return -1;
+}
+
+void clearCommandQueue() {
+  queue_head = 0;
+  queue_tail = 0;
+  queued_command_count = 0;
+}
+
+bool enqueueCommand(int intent_id, int value, uint32_t duration_ms) {
+  if (queued_command_count >= kMaxQueuedCommands) {
+    return false;
+  }
+  const int next_tail = (queue_tail + 1) % kMaxQueuedCommands;
+  command_queue[queue_tail] = {intent_id, constrain(value, 0, 180), duration_ms};
+  queue_tail = next_tail;
+  ++queued_command_count;
+  return true;
+}
+
+bool parsePlan(String plan) {
+  clearCommandQueue();
+  plan.trim();
+  if (!plan.startsWith("PLAN ")) {
+    return false;
+  }
+  plan.remove(0, 5);
+  while (plan.length() > 0) {
+    const int separator = plan.indexOf(';');
+    String item = separator >= 0 ? plan.substring(0, separator) : plan;
+    plan = separator >= 0 ? plan.substring(separator + 1) : "";
+    item.trim();
+    const int first_comma = item.indexOf(',');
+    const int second_comma = item.indexOf(',', first_comma + 1);
+    if (first_comma < 1 || second_comma < 0) {
+      clearCommandQueue();
+      return false;
+    }
+    const int intent_id = intentIdFromName(item.substring(0, first_comma));
+    const int value = item.substring(first_comma + 1, second_comma).toInt();
+    const uint32_t duration_ms = static_cast<uint32_t>(item.substring(second_comma + 1).toInt());
+    if (intent_id < 0 || duration_ms == 0 || !enqueueCommand(intent_id, value, duration_ms)) {
+      clearCommandQueue();
+      return false;
+    }
+    if (intent_id == 12) {
+      break;
+    }
+  }
+  return queue_head != queue_tail;
+}
+
+void processCommandQueue() {
+  if (queued_command_count == 0) {
+    return;
+  }
+  const MotorCommand command = command_queue[queue_head];
+  queue_head = (queue_head + 1) % kMaxQueuedCommands;
+  --queued_command_count;
+  dispatchMotorCommand(command.intent_id, command.value, command.duration_ms);
+}
+
+bool readSerialCommand(String *command) {
+  while (Serial.available() > 0) {
+    const char character = static_cast<char>(Serial.read());
+    if (character == '\n') {
+      *command = serial_buffer;
+      serial_buffer = "";
+      command->trim();
+      return command->length() > 0;
+    }
+    if (character != '\r' && serial_buffer.length() < 128) {
+      serial_buffer += character;
+    }
+  }
+  return false;
 }
 
 bool initializeClassifier() {
@@ -201,15 +387,27 @@ void setup() {
     Serial.println("Classifier initialization failed");
     while (true) delay(1000);
   }
-  Serial.println("Ready. Send one command per line.");
+  Serial.println("Ready. Send one command per line at 115200 baud.");
 }
 
 void loop() {
-  if (!Serial.available()) {
+  processCommandQueue();
+  String command;
+  if (!readSerialCommand(&command)) {
     return;
   }
-  const String command = Serial.readStringUntil('\n');
-  if (command.length() == 0) {
+
+  if (command.startsWith("PLAN ")) {
+    if (parsePlan(command)) {
+      Serial.println("Plan accepted");
+    } else {
+      Serial.println("Plan rejected");
+    }
+    return;
+  }
+
+  if (isStoryRequest(command)) {
+    emitRandomStoryStarter();
     return;
   }
 
@@ -218,7 +416,7 @@ void loop() {
   Serial.printf("intent=%s confidence=%.3f\n",
                 intent >= 0 ? kIntentNames[intent] : "ERROR", confidence);
   if (intent >= 0 && confidence >= 0.55f) {
-    dispatchMotorCommand(intent);
+    enqueueCommand(intent, 90, 500);
   } else {
     Serial.println("Command rejected: low confidence");
   }

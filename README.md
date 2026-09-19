@@ -2,9 +2,11 @@
 
 This project trains a small, offline command classifier and runs it on an ESP32-S3
 with TensorFlow Lite Micro. The model accepts eight integer word-token IDs and
-returns six intent scores:
+returns thirteen intent scores:
 
-`0 ARM_UP`, `1 HEAD_SHAKE`, `2 HEAD_NOD`, `3 TURN_LEFT`, `4 TURN_RIGHT`, `5 STOP`.
+`ARM_UP`, `LEFT_ARM`, `RIGHT_ARM`, `MOVE_FORWARD`, `MOVE_BACKWARD`,
+`HEAD_SHAKE`, `HEAD_NOD`, `HEAD_LEFT`, `HEAD_RIGHT`, `TURN_LEFT`, `TURN_RIGHT`,
+`DANCE`, `STOP`.
 
 ## 1. Train and export on a laptop
 
@@ -21,6 +23,7 @@ The script creates `generated/intent_model.tflite`, `generated/model_data.h`,
 `generated/vocab.h`, and `generated/model_metadata.h`. It writes the model byte
 array itself, so `xxd` is optional.
 The conversion keeps the input as `int32` token IDs (required by the Embedding
+layer) and exports the output as quantized `int8` scores. The script prints the
 actual TensorFlow Lite tensor types, dimensions, held-out accuracy, confusion
 matrix, and model size after conversion.
 
@@ -30,11 +33,11 @@ Rerun it whenever the command vocabulary changes. Copy the complete `generated`
 directory to the Arduino sketch directory; it is intentionally generated rather
 than checked in.
 
-The current training run uses 69 training phrases, 13 validation phrases, and 24
-held-out test phrases. On the development machine it produced a 4,816-byte
-TFLite model with 71 vocabulary entries, `int32[1,8]` input, and `int8[1,6]`
-output. Held-out accuracy was 95.8%; exact size and accuracy can vary with
-TensorFlow versions and training results.
+The current training run uses 129 training phrases, 25 validation phrases, and
+52 held-out test phrases. On the development machine it produced a 5,952-byte
+TFLite model with 95 vocabulary entries, `int32[1,8]` input, and `int8[1,13]`
+output. Held-out accuracy was 76.9%; expand the per-intent phrase lists before
+relying on this model for safety-critical motion.
 
 ## 2. Build the firmware
 
@@ -65,6 +68,114 @@ dimensions at boot, then rejects predictions below 0.55 confidence.
 | --- | --- |
 | Input | `int32[1][8]` token IDs |
 | Vocabulary | Generated `vocab.h`, ID 0 is PAD, ID 1 is UNK |
-| Network | Embedding(8) -> GlobalAveragePooling1D -> Dense(16, ReLU) -> Dense(6, softmax) |
+| Network | Embedding(10) -> GlobalAveragePooling1D -> Dense(24, ReLU) -> Dense(13, softmax) |
 | Output | Six quantized `int8` scores, dequantized using the tensor scale/zero point |
 | Runtime arena | 256 KiB, PSRAM first |
+
+## Laptop prompt runner
+
+Classify one prompt with:
+
+```text
+.venv\Scripts\python.exe run_intent_classifier.py --text "Move your arm up"
+```
+
+Or start an interactive prompt session:
+
+```text
+.venv\Scripts\python.exe run_intent_classifier.py
+```
+
+Each result is printed as JSON with the normalized tokens, intent, confidence,
+and whether it passes the default `0.55` motor-command threshold. Change the
+threshold with `--threshold 0.70`.
+
+## ESP32 prompt runner
+
+Flash `esp32_intent_classifier.ino` with the generated directory beside the
+sketch. Open the serial monitor at **115200 baud**, set line ending to **Newline**,
+and send a prompt such as:
+
+```text
+Turn left
+```
+
+The sketch prints the selected intent and confidence, then dispatches the servo
+macro only when confidence is at least `0.55`. Serial intake is nonblocking and
+bounded to 128 characters, so incomplete input does not pause the main loop.
+
+For a sequence, use the laptop runner's ESP format:
+
+```text
+.venv\Scripts\python.exe run_intent_classifier.py --esp-plan --text "Move your left arm and then shake your head"
+```
+
+Copy the resulting line into the serial monitor:
+
+```text
+PLAN LEFT_ARM,90,500;HEAD_SHAKE,90,500
+```
+
+The ESP32 accepts up to eight commands per plan. Each item is
+`INTENT,value,duration_ms`; values are clamped to 0-180. `STOP` clears future
+execution only when sent as a new plan; motor safety logic should also be wired
+to a physical emergency-stop path.
+
+The laptop planner understands explicit values such as `turn left 45 degrees`,
+and presets such as `a little` (30), default (90), and `a lot` (150). These are
+currently generic motor parameters; the real motor mapping should be calibrated
+per mechanism.
+
+## Behavior tests
+
+Run the broad phrase, sequence, and parameter test corpus with:
+
+```text
+.venv\Scripts\python.exe test_intent_model.py
+```
+
+The current corpus contains 225 cases: casing, punctuation, polite phrasing,
+synonyms, short commands, ambiguous head/body wording, all 169 ordered pairs of
+the 13 atomic intents, human wave/raise/lower commands, sequences, modifiers,
+and explicit numeric values. The latest run passed 225/225. The test script is a
+regression check; add new field phrases there when hardware testing finds a
+real-world failure.
+
+Human-command planning includes these expansions:
+
+- `wave your left arm` -> `LEFT_ARM(160)` then `LEFT_ARM(20)`
+- `raise your left arm` -> `LEFT_ARM(160)`
+- `lower your left arm` -> `LEFT_ARM(20)`
+
+The same arm-direction rules are applied in the laptop planner and ESP32
+inferencer, so raising and lowering do not collapse into the same motor value.
+
+## TinyStories starter routing
+
+Story requests are handled separately from motor intents. The trainer exports ten
+shared starters to `generated/story_starters.json` and
+`generated/story_starters.h`; the existing TinyStories runtime can consume one
+starter as its prompt prefix.
+
+On the laptop:
+
+```text
+.venv\Scripts\python.exe run_intent_classifier.py --text "tell me a story"
+```
+
+Output:
+
+```json
+{"type": "STORY_STARTER", "starter": "..."}
+```
+
+Use `--story` to force story mode for an arbitrary input. On the ESP32, send a
+line such as `tell me a story` at 115200 baud. The Arduino sketch responds with:
+
+```text
+STORY_STARTER At sunrise, a small robot found a locked door beneath the old garden.
+```
+
+Your existing TinyStories `run.cpp` should listen for the `STORY_STARTER ` prefix,
+copy the remainder into its prompt buffer, and begin generation. Story requests
+never enter the motor classifier or servo command queue.
