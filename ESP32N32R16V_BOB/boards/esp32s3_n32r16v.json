@@ -1,0 +1,23 @@
+{
+  "build": {
+    "core": "esp32",
+    "f_cpu": "240000000L",
+    "f_flash": "80000000L",
+    "flash_mode": "opi",
+    "mcu": "esp32s3",
+    "variant": "esp32s3",
+    "flash_size": "32MB"
+  },
+  "frameworks": [
+    "arduino"
+  ],
+  "name": "ESP32-S3 N32R16V",
+  "upload": {
+    "maximum_ram_size": 327680,
+    "maximum_size": 33554432,
+    "protocol": "esptool",
+    "speed": 460800
+  },
+  "url": "https://www.espressif.com/en/products/socs/esp32-s3",
+  "vendor": "Espressif"
+}
