@@ -683,14 +683,78 @@ int lookup_intent_token(const char* word) {
 }
 
 static String normalize_transcript(const String& raw_text) {
-    String normalized = raw_text;
-    normalized.toLowerCase();
-    normalized.replace("lef", "left");
-    normalized.replace("rite", "right");
-    normalized.replace("bakward", "backward");
-    normalized.replace("bakword", "backward");
-    normalized.replace("forword", "forward");
-    normalized.replace("pleese", "please");
+    String text = raw_text;
+    text.toLowerCase();
+
+    struct Replacement {
+        const char* from;
+        const char* to;
+    };
+    static const Replacement kReplacements[] = {
+        {"lef", "left"},
+        {"rite", "right"},
+        {"bakward", "backward"},
+        {"bakword", "backward"},
+        {"forword", "forward"},
+        {"pleese", "please"}
+    };
+    const size_t kReplacementCount = sizeof(kReplacements) / sizeof(kReplacements[0]);
+
+    String normalized = "";
+    normalized.reserve(text.length() + 8);
+    int len = text.length();
+    int i = 0;
+    while (i < len) {
+        while (i < len && (text[i] == ' ' || text[i] == '\t' || text[i] == '\r' || text[i] == '\n')) {
+            ++i;
+        }
+        if (i >= len) break;
+
+        int start = i;
+        while (i < len && text[i] != ' ' && text[i] != '\t' && text[i] != '\r' && text[i] != '\n') {
+            ++i;
+        }
+
+        String word = text.substring(start, i);
+
+        int p_start = 0;
+        int p_end = word.length();
+        while (p_start < p_end) {
+            char c = word[p_start];
+            if (c == '.' || c == ',' || c == '!' || c == '?' || c == ';' || c == ':') {
+                ++p_start;
+            } else {
+                break;
+            }
+        }
+        while (p_end > p_start) {
+            char c = word[p_end - 1];
+            if (c == '.' || c == ',' || c == '!' || c == '?' || c == ';' || c == ':') {
+                --p_end;
+            } else {
+                break;
+            }
+        }
+        String clean_word = word.substring(p_start, p_end);
+        if (clean_word.length() == 0) continue;
+
+        const char* replacement = nullptr;
+        for (size_t r = 0; r < kReplacementCount; ++r) {
+            if (clean_word == kReplacements[r].from) {
+                replacement = kReplacements[r].to;
+                break;
+            }
+        }
+
+        if (normalized.length() > 0) {
+            normalized += ' ';
+        }
+        if (replacement != nullptr) {
+            normalized += replacement;
+        } else {
+            normalized += clean_word;
+        }
+    }
     return normalized;
 }
 

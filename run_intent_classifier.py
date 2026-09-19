@@ -177,8 +177,9 @@ class IntentClassifier:
         self.input_details = self.interpreter.get_input_details()[0]
         self.output_details = self.interpreter.get_output_details()[0]
         input_shape = tuple(int(value) for value in self.input_details["shape"])
+        self.max_tokens = input_shape[1]
         output_shape = tuple(int(value) for value in self.output_details["shape"])
-        if input_shape != (1, 8) or self.input_details["dtype"] != np.int32:
+        if len(input_shape) != 2 or input_shape[0] != 1 or self.input_details["dtype"] != np.int32:
             raise ValueError(f"Unexpected model input contract: {input_shape}, {self.input_details['dtype']}")
         if output_shape != (1, len(INTENTS)):
             raise ValueError(f"Unexpected model output contract: {output_shape}")
@@ -189,8 +190,8 @@ class IntentClassifier:
         rule_intent = rule_based_intent(normalized)
         if rule_intent is not None:
             return rule_intent, 1.0, words
-        token_ids = [self.vocabulary.get(word, 1) for word in words[:8]]
-        token_ids.extend([0] * (8 - len(token_ids)))
+        token_ids = [self.vocabulary.get(word, 1) for word in words[:self.max_tokens]]
+        token_ids.extend([0] * (self.max_tokens - len(token_ids)))
         input_values = np.asarray([token_ids], dtype=np.int32)
         self.interpreter.set_tensor(self.input_details["index"], input_values)
         self.interpreter.invoke()
