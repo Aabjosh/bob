@@ -1,0 +1,18 @@
+#pragma once
+#include <stdint.h>
+
+#define INTENT_METADATA_CLASS_COUNT 6
+#define INTENT_METADATA_VOCAB_SIZE 71
+#define INTENT_METADATA_MAX_TOKENS 8
+#define INTENT_METADATA_MODEL_BYTES 4816
+#define INTENT_METADATA_INPUT_TYPE_INT32 1
+#define INTENT_METADATA_OUTPUT_TYPE_INT8 1
+
+static const char *const kIntentClassNames[INTENT_METADATA_CLASS_COUNT] = {
+    "ARM_UP",
+    "HEAD_SHAKE",
+    "HEAD_NOD",
+    "TURN_LEFT",
+    "TURN_RIGHT",
+    "STOP",
+};
