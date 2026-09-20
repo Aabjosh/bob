@@ -1,0 +1,7 @@
+vosk
+sounddevice
+pyserial
+numpy
+opencv-python-headless
+ultralytics
+mediapipe

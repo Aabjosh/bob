@@ -1,13 +1,13 @@
 # main.py
-import head.ClickClass as CC
+import ClickClass as CC
 import navigate as NavClass
 import findObject as FO
 import time
-import serial
 
 BODY_90_TURN_STEPS = 4  # tune this: how many "turn right" pulses = 90° body rotation on real hardware
 
-ser = serial.Serial('/dev/ttyUSB0', 115200, timeout=1)
+# share navigate's serial port; opening /dev/ttyUSB0 twice makes two handles fight over reads
+ser = NavClass.ser
 
 # persistent objects, created once, reused across every voice command
 cam = CC.Click()
@@ -33,7 +33,7 @@ def handle_instruction(instruction):
     nav.avoid_steps_left = 0
     nav.lastKnownTarget = None
 
-    target, obstacles = FO.find_object(cam, tagID)
+    target, obstacles = FO.find_object(cam, tagID, NavClass.send_head_command)
 
     while True:
         move = nav.decide(target, obstacles)

@@ -2,6 +2,7 @@
 # also takes care of finding obstacles and stuff, this is where the yolo thingies should go 
 # need to have fixed constants class for the sizings of objects, to accurately tell distance? (ex. hands, doors)
 
+import os
 import cv2
 import json
 import numpy as np
@@ -44,7 +45,7 @@ def getItemIndex( instruction ):
 
 class Click:
     def __init__(self):
-        self.capture = cv2.VideoCapture(2)
+        self.capture = cv2.VideoCapture(int(os.environ.get("BOB_CAMERA", 2)))
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         success, frame = self.capture.read()
