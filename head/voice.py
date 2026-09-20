@@ -62,6 +62,7 @@ aplay_proc = subprocess.Popen(
 
 speech_q = queue.Queue()
 command_q = queue.Queue()
+instruct.say = speech_q.put  # sentences Bob composes himself, e.g. "the person is right where I'm looking"
 
 def speaker_worker():
     while True:

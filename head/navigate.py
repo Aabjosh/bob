@@ -181,3 +181,14 @@ def center_head():
     global head_angle
     head_angle = 0.0
     _move_head_to(0.0)
+
+def head_bearing_deg():
+    """Where the head points relative to the body, in degrees; positive = right."""
+    return -HEAD_SIGN * head_angle
+
+def look_at_bearing(bearing_deg):
+    """Turn the head to an absolute bearing (positive = right), limited to +/-HEAD_LIMIT_DEG."""
+    global head_angle
+    _check_cancel()
+    head_angle = max(-HEAD_LIMIT_DEG, min(HEAD_LIMIT_DEG, -HEAD_SIGN * bearing_deg))
+    _move_head_to(head_angle)
