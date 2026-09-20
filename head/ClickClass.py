@@ -7,6 +7,8 @@ import cv2
 import json
 import numpy as np
 import mediapipe as mp
+from mediapipe.tasks import python as mp_tasks
+from mediapipe.tasks.python import vision as mp_vision
 from ultralytics import YOLO
 
 model = YOLO("yolo26n.pt")
@@ -20,12 +22,17 @@ with open("objectWidths.json", "r") as f:
 mtx = np.array(data["camera_matrix"])
 dist = np.array(data["distortion_coefficients"])
 
-mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(
-    static_image_mode=True,
-    model_complexity=0,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
+# Tasks API (mp.solutions was removed in newer mediapipe); still-image mode, one person per crop
+LEFT_SHOULDER = 11
+RIGHT_SHOULDER = 12
+pose = mp_vision.PoseLandmarker.create_from_options(
+    mp_vision.PoseLandmarkerOptions(
+        base_options=mp_tasks.BaseOptions(model_asset_path="pose_landmarker_lite.task"),
+        running_mode=mp_vision.RunningMode.IMAGE,
+        num_poses=1,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
+    )
 )
 
 # Create a quick helper to get the index from a string
@@ -115,14 +122,16 @@ class Click:
 
                         if person_roi.size > 0:
                             roi_rgb = cv2.cvtColor(person_roi, cv2.COLOR_BGR2RGB)
-                            pose_results = pose.process(roi_rgb)
+                            pose_results = pose.detect(
+                                mp.Image(image_format=mp.ImageFormat.SRGB, data=roi_rgb)
+                            )
 
                             if pose_results.pose_landmarks:
-                                lms = pose_results.pose_landmarks.landmark
+                                lms = pose_results.pose_landmarks[0]
                                 roi_h, roi_w = person_roi.shape[:2]
 
-                                l_sh = lms[mp_pose.PoseLandmark.LEFT_SHOULDER]
-                                r_sh = lms[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+                                l_sh = lms[LEFT_SHOULDER]
+                                r_sh = lms[RIGHT_SHOULDER]
 
                                 if l_sh.visibility > 0.5 and r_sh.visibility > 0.5:
                                     # Map relative landmark coordinates back to global frame pixels

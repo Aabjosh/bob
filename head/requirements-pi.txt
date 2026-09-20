@@ -1,7 +1,7 @@
+mediapipe
+numpy
+opencv-contrib-python
 vosk
 sounddevice
 pyserial
-numpy
-opencv-python-headless
 ultralytics
-mediapipe
