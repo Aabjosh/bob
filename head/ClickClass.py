@@ -4,28 +4,41 @@
 
 import cv2
 import json
+import os
 import numpy as np
-import mediapipe as mp
 from ultralytics import YOLO
 
-model = YOLO("yolo26n.pt")
+try:
+    import mediapipe as mp
+    mp_pose = mp.solutions.pose
+except (ImportError, AttributeError):  # missing, or a new mediapipe without the legacy solutions API
+    mp = None
+    print("mediapipe pose unavailable, person distance will use bounding box width")
 
-with open("camera_calibration.json", "r") as f:
+# resolve data files next to this file so it works regardless of the caller's cwd
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+model = YOLO(os.path.join(HERE, "yolo26n.pt"))
+
+with open(os.path.join(HERE, "camera_calibration.json"), "r") as f:
     data = json.load(f)
 
-with open("objectWidths.json", "r") as f:
+with open(os.path.join(HERE, "objectWidths.json"), "r") as f:
     widths = json.load(f)
 
-mtx = np.array(data["camera_matrix"])
+CAMERA_DEVICE = os.environ.get("BOB_CAMERA", "/dev/video0")
+
+mtx = np.array(data["camera_matrix"], dtype=np.float64)
 dist = np.array(data["distortion_coefficients"])
 
-mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(
-    static_image_mode=True,
-    model_complexity=0,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
-)
+pose = None
+if mp is not None:
+    pose = mp_pose.Pose(
+        static_image_mode=True,
+        model_complexity=0,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    )
 
 # Create a quick helper to get the index from a string
 def getItemIndex( instruction ):
@@ -44,16 +57,29 @@ def getItemIndex( instruction ):
 
 class Click:
     def __init__(self):
-        self.capture = cv2.VideoCapture(2)
+        # On the Pi, OpenCV's numeric indexes don't match /dev/videoN, so open the Innomaker by path.
+        # Override with BOB_CAMERA=<index or path> if it ever moves.
+        source = int(CAMERA_DEVICE) if CAMERA_DEVICE.isdigit() else CAMERA_DEVICE
+        self.capture = cv2.VideoCapture(source, cv2.CAP_V4L2) if isinstance(source, str) else cv2.VideoCapture(source)
+        self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-        success, frame = self.capture.read()
+        success, frame = False, None
+        for _ in range(30):  # let auto-exposure settle, the first frames are black
+            success, frame = self.capture.read()
         self.lastKnownTarget = None
 
         if not success:
             raise RuntimeError( "No valid frame reading!" )
 
         h, w = frame.shape[:2]
+
+        # calibration was made at data["resolution"]; rescale if the camera gave a different size
+        calW, calH = data.get("resolution", [w, h])
+        if (w, h) != (calW, calH):
+            mtx[0, :] *= w / calW
+            mtx[1, :] *= h / calH
+            print(f"camera is {w}x{h}, calibration rescaled from {calW}x{calH}")
 
         # alpha=0: Automatically crops out ALL warped edges (gives clean rectangle)
         # alpha=1: Keeps every pixel but leaves slight dark curved borders
@@ -107,7 +133,7 @@ class Click:
                     # =========================================================
                     # MEDIAPIPE POSE (ISOLATED CROP ONLY) (Thanks gemini idk how mediapipe works :))
                     # =========================================================
-                    if cls_name == "person" and conf >= 0.75:
+                    if pose is not None and cls_name == "person" and conf >= 0.75:
                         crop_ym, crop_yM = max(0, ym), min(h, yM)
                         crop_xm, crop_xM = max(0, xm), min(w, xM)
                         person_roi = undistorted_frame[crop_ym:crop_yM, crop_xm:crop_xM]
@@ -194,6 +220,39 @@ class Click:
                     return None, None
         else:
             return None, None
+
+    def detectAll(self, minConf=0.5):
+        """
+        Everything currently in view, for "what do you see" style questions.
+        Returns None if the camera read failed, else a list of
+        {"name": str, "conf": float, "dist": float | None (meters), "centerX": float (px)}.
+        Does not touch lastKnownTarget or the navigation logic.
+        """
+        self.capture.read()  # flush the stale buffered frame, same as getImg
+        success, frame = self.capture.read()
+        if not success:
+            return None
+
+        undistorted_frame = cv2.undistort(frame, mtx, dist, None, self.new_camera_mtx)
+        found = []
+        for result in model(undistorted_frame, verbose=False):
+            for box in result.boxes:
+                conf = float(box.conf[0])
+                if conf < minConf:
+                    continue
+                cls_name = model.names[int(box.cls[0])]
+                xm, ym, xM, yM = map(int, box.xyxy[0].tolist())
+                pixelWidth = xM - xm
+                estimatedDist = None
+                if pixelWidth > 0 and cls_name in widths:
+                    estimatedDist = float(widths[cls_name] / (pixelWidth / self.focalLength))
+                found.append({
+                    "name": cls_name,
+                    "conf": conf,
+                    "dist": estimatedDist,
+                    "centerX": (xm + xM) / 2,
+                })
+        return found
 
     def __del__(self):
         self.capture.release()
