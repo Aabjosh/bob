@@ -97,7 +97,7 @@ def relocate_target(cam, tagID, last_known_offset):
     return None, obstacles
 
 
-ser = serial.Serial('/dev/ttyUSB0', 9600, timeout=1)  # adjust port + baud rate to match your hardware
+ser = serial.Serial('/dev/ttyUSB0', 115200, timeout=1)  # adjust port + baud rate to match your hardware
 
 def send_body_command(cmd):
     ser.write((cmd + "\n").encode())
