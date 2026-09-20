@@ -3,6 +3,7 @@
 # need to have fixed constants class for the sizings of objects, to accurately tell distance? (ex. hands, doors)
 
 import os
+import glob
 import cv2
 import json
 import numpy as np
@@ -50,9 +51,31 @@ def getItemIndex( instruction ):
 
     return None
 
+def find_camera_index():
+    """BOB_CAMERA wins. Otherwise pick the capture node of the USB camera whose name
+    contains BOB_CAMERA_NAME (Linux), since /dev/videoN numbers move between boots and ports."""
+    override = os.environ.get("BOB_CAMERA")
+    if override is not None:
+        return int(override)
+
+    wanted = os.environ.get("BOB_CAMERA_NAME", "innomaker").lower()
+    for path in sorted(glob.glob("/sys/class/video4linux/video*"),
+                       key=lambda p: int(p.rsplit("video", 1)[1])):
+        try:
+            with open(path + "/name") as f:
+                name = f.read().lower()
+            with open(path + "/index") as f:
+                node_index = int(f.read())
+        except (OSError, ValueError):
+            continue
+        if wanted in name and node_index == 0:  # index 0 = video capture, not the metadata node
+            return int(path.rsplit("video", 1)[1])
+    return 2
+
 class Click:
     def __init__(self):
-        self.capture = cv2.VideoCapture(int(os.environ.get("BOB_CAMERA", 2)))
+        self.capture = cv2.VideoCapture(find_camera_index())
+        self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # 1080p over USB 2 needs MJPG for a usable frame rate
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         success, frame = self.capture.read()
@@ -151,7 +174,7 @@ class Click:
 
                     if conf >= 0.70 and estimatedDist <= 4:
 
-                        centerX = ( xm + xM ) / 2
+                        centerX = ( xm + xM ) / 2 - w / 2  # pixels right of image center (negative = left)
 
                         # object/obstacle flag, distance in Z (not numpy), center of obj on x axis relative to sensor
                         

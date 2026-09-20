@@ -1,10 +1,16 @@
 # main.py
+import math
 import ClickClass as CC
 import navigate as NavClass
 import findObject as FO
 import time
 
 BODY_90_TURN_STEPS = 4  # tune this: how many "turn right" pulses = 90° body rotation on real hardware
+
+MAX_EMPTY_CYCLES = 4     # give up after this many consecutive cycles with no target in view
+MAX_TASK_SECONDS = 120   # hard cap on one navigation task
+HEAD_GAIN = 0.7          # fraction of the measured angle error corrected per head move
+MUTE_AFTER_SECONDS = 4   # keep muting briefly: the ESP32's last quip arrives after we finish
 
 # share navigate's serial port; opening /dev/ttyUSB0 twice makes two handles fight over reads
 ser = NavClass.ser
@@ -13,13 +19,21 @@ ser = NavClass.ser
 cam = CC.Click()
 nav = NavClass.Navigator()
 
+# voice.py drops the ESP32's spoken quips while this is in the future (every head/wheel command makes Bob quip)
+_mute_until = 0.0
+
+def is_muted():
+    return time.time() < _mute_until
+
 def handle_instruction(instruction):
     """
     Called by the voice-command file with the raw instruction string.
     Tries to resolve an object ID; if found, runs the navigation pipeline
-    until the target is reached. If not found, forwards the raw string
-    to serial as a fallback command.
+    until the target is reached (or we give up). If not found, forwards the
+    raw string to serial as a fallback command.
     """
+    global _mute_until
+
     tagID = CC.getItemIndex(instruction)
 
     if tagID is None:
@@ -27,6 +41,14 @@ def handle_instruction(instruction):
         ser.write((instruction + "\n").encode())
         return
 
+    _mute_until = float("inf")
+    try:
+        _navigate_to(tagID)
+    finally:
+        NavClass.center_head()
+        _mute_until = time.time() + MUTE_AFTER_SECONDS
+
+def _navigate_to(tagID):
     # reset navigator state for a fresh task
     nav.avoid_state = None
     nav.avoid_direction = None
@@ -34,15 +56,27 @@ def handle_instruction(instruction):
     nav.lastKnownTarget = None
 
     target, obstacles = FO.find_object(cam, tagID, NavClass.send_head_command)
+    if target is None:
+        print("giving up: never found the target")
+        return
 
-    while True:
+    empty_cycles = 0
+    deadline = time.time() + MAX_TASK_SECONDS
+
+    while time.time() < deadline:
         move = nav.decide(target, obstacles)
+        print(f"nav: move={move!r} target={target} obstacles={len(obstacles or [])}")
 
         if move == "relocate target":
             last_offset = nav.lastKnownTarget[2] if nav.lastKnownTarget else None
             target, obstacles = NavClass.relocate_target(cam, tagID, last_offset)
             nav.lastKnownTarget = target
             move = nav.decide(target, obstacles)
+
+        empty_cycles = empty_cycles + 1 if (target is None and move == "") else 0
+        if empty_cycles >= MAX_EMPTY_CYCLES:
+            print("giving up: lost the target")
+            break
 
         if move == "rotate body 90 clockwise":
             for _ in range(BODY_90_TURN_STEPS):
@@ -58,7 +92,9 @@ def handle_instruction(instruction):
             pass  # nothing to send this cycle
 
         elif move.startswith("turn head"):
-            NavClass.send_head_command(move)
+            # head commands are absolute on the ESP32, so step by the angle the target is off-center
+            error_deg = math.degrees(math.atan(abs(target[2]) / cam.focalLength))
+            NavClass.send_head_command(move, max(3, min(25, error_deg * HEAD_GAIN)))
 
         else:
             NavClass.send_body_command(move)  # "turn left" / "turn right" / "drive forward"

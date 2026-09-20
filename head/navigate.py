@@ -102,5 +102,33 @@ ser = serial.Serial('/dev/ttyUSB0', 115200, timeout=1)  # adjust port + baud rat
 def send_body_command(cmd):
     ser.write((cmd + "\n").encode())
 
-def send_head_command(cmd):
-    ser.write((cmd + "\n").encode())
+# The ESP32's head commands are absolute: "head left N degrees" puts the servo at 90 + N/2 and
+# "head right N degrees" at 90 - N/2 (N is clamped to 0-180). Track the angle here so that
+# "turn head left/right" behave as relative steps.
+HEAD_STEP_DEG = 12    # default sweep step, in servo degrees
+HEAD_LIMIT_DEG = 60   # max servo travel each side of center
+HEAD_SIGN = 1         # set to -1 if "turn head left" makes the camera look right
+head_angle = 0.0      # servo degrees from center, positive = what the firmware calls "left"
+
+def _write_head_angle():
+    value = int(round(abs(head_angle) * 2))
+    side = "left" if head_angle >= 0 else "right"
+    ser.write(f"head {side} {value} degrees\n".encode())
+
+def send_head_command(cmd, degrees=None):
+    global head_angle
+    step = HEAD_STEP_DEG if degrees is None else degrees
+    if cmd == "turn head left":
+        head_angle += HEAD_SIGN * step
+    elif cmd == "turn head right":
+        head_angle -= HEAD_SIGN * step
+    else:
+        ser.write((cmd + "\n").encode())
+        return
+    head_angle = max(-HEAD_LIMIT_DEG, min(HEAD_LIMIT_DEG, head_angle))
+    _write_head_angle()
+
+def center_head():
+    global head_angle
+    head_angle = 0.0
+    _write_head_angle()

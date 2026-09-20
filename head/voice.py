@@ -80,8 +80,8 @@ def serial_listener(ser):
             in_story = True
         elif line == "STORY_DONE":
             in_story = False
-        elif in_story:
-            speech_q.put(line)
+        elif in_story and not instruct.is_muted():
+            speech_q.put(line)  # dropped during navigation: every head/wheel command makes Bob quip
 
 def command_worker():
     # handle_instruction blocks until a navigation task finishes, so it runs here
