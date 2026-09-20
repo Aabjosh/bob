@@ -2,4 +2,4 @@
 # Left, sample, forward, sample, right, sample
 # stops if it detects the obj we want with high accuracy, figures out its position from the locateInSpace, then locks on
 
-import locateInSpace as LIS
+import head.ClickClass as CC
