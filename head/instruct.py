@@ -21,9 +21,21 @@ nav = NavClass.Navigator()
 
 # voice.py drops the ESP32's spoken quips while this is in the future (every head/wheel command makes Bob quip)
 _mute_until = 0.0
+_navigating = False
+
+def _clean_for_esp32(text):
+    """The ESP32 classifier reads "move your ..." as INTRO (Bob's ~40 s monologue) at 0.563 confidence,
+    just over its 0.55 cutoff. The words after it ("head to the left") classify fine, so drop "your"."""
+    words = [w for w in text.split() if w.lower().strip(",.!?") != "your"]
+    return " ".join(words) or text
 
 def is_muted():
     return time.time() < _mute_until
+
+def cancel_navigation():
+    """Called by voice.py when a new command arrives: abort a running navigation task."""
+    if _navigating:
+        NavClass.cancel.set()
 
 def handle_instruction(instruction):
     """
@@ -32,21 +44,29 @@ def handle_instruction(instruction):
     until the target is reached (or we give up). If not found, forwards the
     raw string to serial as a fallback command.
     """
-    global _mute_until
+    global _mute_until, _navigating
 
     tagID = CC.getItemIndex(instruction)
 
     if tagID is None:
         # couldn't figure out an object from the instruction -> forward raw string
-        ser.write((instruction + "\n").encode())
+        ser.write((_clean_for_esp32(instruction) + "\n").encode())
         return
 
+    NavClass.cancel.clear()
+    _navigating = True
     _mute_until = float("inf")
     try:
         _navigate_to(tagID)
+    except NavClass.Cancelled:
+        print("navigation cancelled by a new command")
     finally:
-        NavClass.center_head()
-        _mute_until = time.time() + MUTE_AFTER_SECONDS
+        NavClass.cancel.clear()  # so the cleanup below isn't itself cancelled
+        try:
+            NavClass.center_head()
+        finally:
+            _navigating = False
+            _mute_until = time.time() + MUTE_AFTER_SECONDS
 
 def _navigate_to(tagID):
     # reset navigator state for a fresh task

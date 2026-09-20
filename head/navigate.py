@@ -1,5 +1,6 @@
 # navigate.py
 import math
+import threading
 import time
 import serial
 
@@ -100,7 +101,19 @@ def relocate_target(cam, tagID, last_known_offset):
 
 ser = serial.Serial('/dev/ttyUSB0', 115200, timeout=1)  # adjust port + baud rate to match your hardware
 
+class Cancelled(Exception):
+    pass
+
+# voice.py sets this (via instruct.cancel_navigation) when a new command arrives mid-task,
+# so the robot stops what it's doing instead of finishing a long search first
+cancel = threading.Event()
+
+def _check_cancel():
+    if cancel.is_set():
+        raise Cancelled()
+
 def send_body_command(cmd):
+    _check_cancel()
     ser.write((cmd + "\n").encode())
 
 # The ESP32's head commands are absolute: "head left N degrees" puts the servo at 90 + N/2 and
@@ -110,7 +123,7 @@ HEAD_STEP_DEG = 12           # default sweep step, in servo degrees
 HEAD_LIMIT_DEG = 60          # max servo travel each side of center
 HEAD_SIGN = 1                # set to -1 if "turn head left" makes the camera look right
 HEAD_SPEED_DEG_PER_S = 40    # head speed; lower = gentler (an SG90 free-runs at ~600)
-HEAD_STEP_INTERVAL_S = 0.08  # gap between serial steps (the ESP32 needs ~50 ms to handle a line)
+HEAD_STEP_INTERVAL_S = 0.15  # gap between serial steps; every line costs the ESP32 a classify + a quip, so keep it sparse
 head_angle = 0.0             # where the head is headed, servo degrees from center, positive = firmware "left"
 _sent_angle = 0.0            # last angle actually sent to the servo
 
@@ -126,12 +139,14 @@ def _move_head_to(target):
     steps = math.ceil(abs(target - _sent_angle) / max_step)
     start = _sent_angle
     for i in range(1, steps + 1):
+        _check_cancel()
         _sent_angle = start + (target - start) * i / steps
         _write_servo_angle(_sent_angle)
         time.sleep(HEAD_STEP_INTERVAL_S)
 
 def send_head_command(cmd, degrees=None):
     global head_angle
+    _check_cancel()
     step = HEAD_STEP_DEG if degrees is None else degrees
     if cmd == "turn head left":
         head_angle += HEAD_SIGN * step

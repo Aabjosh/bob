@@ -75,13 +75,15 @@ def serial_listener(ser):
         line = ser.readline().decode(errors='ignore').strip()
         if not line:
             continue
-        print("ESP32:", line)
+        quiet = instruct.is_muted()  # during navigation every head/wheel command makes Bob quip
+        if not (quiet and (in_story or line in ("STORY_START", "STORY_DONE"))):
+            print("ESP32:", line)
         if line == "STORY_START":
             in_story = True
         elif line == "STORY_DONE":
             in_story = False
-        elif in_story and not instruct.is_muted():
-            speech_q.put(line)  # dropped during navigation: every head/wheel command makes Bob quip
+        elif in_story and not quiet:
+            speech_q.put(line)
 
 def command_worker():
     # handle_instruction blocks until a navigation task finishes, so it runs here
@@ -124,6 +126,7 @@ with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype='int16',
             active, buffer, command = process(text, active, buffer)
             if command:
                 print(f"Handling instruction: {command}")
+                instruct.cancel_navigation()  # a new command supersedes any navigation still running
                 command_q.put(command)
             elif active:
                 print("(listening for command...)")
