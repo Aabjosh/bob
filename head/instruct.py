@@ -85,6 +85,7 @@ def _navigate_to(tagID):
             NavClass.send_body_command("drive forward")
 
         elif move == "stop":
+            NavClass.center_head()  # the firmware's STOP snaps the head to center instantly, so ease it there first
             NavClass.send_body_command("stop")
             break  # target reached, task complete -> return to caller
 

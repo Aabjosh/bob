@@ -1,4 +1,5 @@
 # navigate.py
+import math
 import time
 import serial
 
@@ -103,17 +104,31 @@ def send_body_command(cmd):
     ser.write((cmd + "\n").encode())
 
 # The ESP32's head commands are absolute: "head left N degrees" puts the servo at 90 + N/2 and
-# "head right N degrees" at 90 - N/2 (N is clamped to 0-180). Track the angle here so that
-# "turn head left/right" behave as relative steps.
-HEAD_STEP_DEG = 12    # default sweep step, in servo degrees
-HEAD_LIMIT_DEG = 60   # max servo travel each side of center
-HEAD_SIGN = 1         # set to -1 if "turn head left" makes the camera look right
-head_angle = 0.0      # servo degrees from center, positive = what the firmware calls "left"
+# "head right N degrees" at 90 - N/2 (N is clamped to 0-180), and the servo jumps there at full
+# speed. To move slower, send a run of small absolute steps from here, one every HEAD_STEP_INTERVAL_S.
+HEAD_STEP_DEG = 12           # default sweep step, in servo degrees
+HEAD_LIMIT_DEG = 60          # max servo travel each side of center
+HEAD_SIGN = 1                # set to -1 if "turn head left" makes the camera look right
+HEAD_SPEED_DEG_PER_S = 40    # head speed; lower = gentler (an SG90 free-runs at ~600)
+HEAD_STEP_INTERVAL_S = 0.08  # gap between serial steps (the ESP32 needs ~50 ms to handle a line)
+head_angle = 0.0             # where the head is headed, servo degrees from center, positive = firmware "left"
+_sent_angle = 0.0            # last angle actually sent to the servo
 
-def _write_head_angle():
-    value = int(round(abs(head_angle) * 2))
-    side = "left" if head_angle >= 0 else "right"
+def _write_servo_angle(angle):
+    value = int(round(abs(angle) * 2))
+    side = "left" if angle >= 0 else "right"
     ser.write(f"head {side} {value} degrees\n".encode())
+
+def _move_head_to(target):
+    """Ramp the servo from where it is to `target`, blocking until it gets there."""
+    global _sent_angle
+    max_step = HEAD_SPEED_DEG_PER_S * HEAD_STEP_INTERVAL_S
+    steps = math.ceil(abs(target - _sent_angle) / max_step)
+    start = _sent_angle
+    for i in range(1, steps + 1):
+        _sent_angle = start + (target - start) * i / steps
+        _write_servo_angle(_sent_angle)
+        time.sleep(HEAD_STEP_INTERVAL_S)
 
 def send_head_command(cmd, degrees=None):
     global head_angle
@@ -126,9 +141,9 @@ def send_head_command(cmd, degrees=None):
         ser.write((cmd + "\n").encode())
         return
     head_angle = max(-HEAD_LIMIT_DEG, min(HEAD_LIMIT_DEG, head_angle))
-    _write_head_angle()
+    _move_head_to(head_angle)
 
 def center_head():
     global head_angle
     head_angle = 0.0
-    _write_head_angle()
+    _move_head_to(0.0)
