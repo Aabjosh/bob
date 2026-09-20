@@ -66,7 +66,7 @@ class Click:
         # dont do anything if u cant find 
         if id is None:
             print("no objects to locate... calling the regular model")
-            # add the call to the esp32 here!
+            
             return None, None
         
         self.capture.read()
