@@ -72,6 +72,8 @@ class Click:
         success, frame = self.capture.read()
 
         returns = []
+        objectsFound = []
+        obstaclesFound = []
         
         if success:
             h, w = frame.shape[:2]
@@ -141,7 +143,11 @@ class Click:
                         centerX = ( xm + xM ) / 2
 
                         # object/obstacle flag, distance in Z (not numpy), center of obj on x axis relative to sensor
-                        returns.append([isObject, float(estimatedDist), centerX])
+                        
+                        if isObject:
+                            objectsFound.append([True, float(estimatedDist), centerX])
+                        else:
+                            obstaclesFound.append([False, float(estimatedDist), centerX])
                         
                         # cv2.rectangle( 
                         #     undistorted_frame, 
@@ -162,7 +168,23 @@ class Click:
                         # ) # to remove!
             
             # cv2.imwrite("distances.png", undistorted_frame) # to remove!
-            if len(returns) > 0:
+
+            # only care about the closest instance of the object you are locating, and treat other one as an obstacle
+            if len(objectsFound) > 0:
+                closest = None
+                closestDist = 999
+                for obj in objectsFound:
+                    if obj[1] < closestDist:
+                        if closest is not None:
+                            closest[0] = False
+                            obstaclesFound.append(closest)
+                        closestDist = obj[1]
+                        closest = obj
+                    else:
+                        obj[0] = False
+                        obstaclesFound.append(obj)
+
+                returns = [closest] + obstaclesFound
                 return returns
             else:
                 return None
@@ -175,7 +197,7 @@ class Click:
 
 def main():
     cam = Click()
-    tagID = getItemIndex("this is a chair")
+    tagID = getItemIndex("this is a person")
 
     for _ in range(5):
         inferenceResult = cam.getImg(tagID)
