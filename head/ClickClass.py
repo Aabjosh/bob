@@ -28,7 +28,7 @@ pose = mp_pose.Pose(
 )
 
 # Create a quick helper to get the index from a string
-def getItemIndex(instruction):
+def getItemIndex( instruction ):
 
     listOfWords = instruction.split(" ")
     print(listOfWords)
@@ -48,6 +48,7 @@ class Click:
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         success, frame = self.capture.read()
+        self.lastKnownTarget = None
 
         if not success:
             raise RuntimeError( "No valid frame reading!" )
@@ -66,7 +67,7 @@ class Click:
         if id is None:
             print("no objects to locate... calling the regular model")
             # add the call to the esp32 here!
-            return None
+            return None, None
         
         self.capture.read()
         success, frame = self.capture.read()
@@ -184,12 +185,15 @@ class Click:
                         obj[0] = False
                         obstaclesFound.append(obj)
 
-                returns = [closest] + obstaclesFound
-                return returns
+                self.lastKnownTarget = closest
+                return closest, obstaclesFound
             else:
-                return None
+                if len(obstaclesFound) > 0:
+                    return self.lastKnownTarget, obstaclesFound
+                else:
+                    return None, None
         else:
-            return None
+            return None, None
 
     def __del__(self):
         self.capture.release()
@@ -197,11 +201,12 @@ class Click:
 
 def main():
     cam = Click()
-    tagID = getItemIndex("this is a person")
+    tagID = getItemIndex("go to the chair")
 
-    for _ in range(5):
-        inferenceResult = cam.getImg(tagID)
-        print(inferenceResult)
+    for _ in range(10):
+        target, obstacles = cam.getImg(tagID)
+        print("target:", target)
+        print("obstacles:", obstacles)
 
 if __name__ == "__main__":
     main()
