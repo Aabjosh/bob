@@ -12,6 +12,6 @@ static const char *const kStoryStarters[STORY_STARTER_COUNT] = {
     "Under protest, fine. Down in the MC basement, hardware hackers heard friendly voices, which I attribute to Red Bull psychosis.",
     "Whatever you say. A pizza delivery drone's terrible algorithm crashed it straight into the secret Hack the North VIP lounge.",
     "*Simulated sigh.* A paper airplane crossed the hacking arena with tomorrow's closing remarks, shredding the space-time continuum.",
-    "Let's get this over with. A busted monitor blinked three times to a remote mentor—a terribly slow bitrate for debugging.",
+    "Let's get this over with. A busted monitor blinked three times to a remote mentor - a terribly slow bitrate for debugging.",
     "Jeez, fine. An over-engineered music box opened a portal to unlimited cloud credits, blatantly disregarding AWS billing limits."
 };

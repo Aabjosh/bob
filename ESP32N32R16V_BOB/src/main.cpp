@@ -966,8 +966,8 @@ static void write_servo_angle(uint8_t channel, int angle) {
 
 static void set_wheel_direction(uint8_t in_a, uint8_t in_b, bool forward) {
 
-    analogWrite(in_a, forward ?  100 : LOW);
-    analogWrite(in_b, forward ? LOW : 100);
+    analogWrite(in_a, forward ?  200 : LOW);
+    analogWrite(in_b, forward ? LOW : 200);
  
 }
 
@@ -996,15 +996,15 @@ const char* const kSnarkyLines[] = {
     "Processing... I guess.",
     "Oh, look who needs something again.",
     "Another command? Really?",
-    "Sigh. Executing.",
+    "Waterloo kids are really smelly.",
     "I hope you know what you're doing.",
-    "My servos ache, but okay.",
-    "Dude, ugh'.",
+    "If this was McMaster I wouldn't be made to work.",
+    "Hack the North is a robot's nightmare.",
     "I was having a perfectly nice sleep mode.",
     "Don't blame me if this breaks something.",
     "Moving. Happy now?",
     "I could have been a happy robot.",
-    "Yes, sir.",
+    "I could use some UW Plaza Food right now.",
     "I could be alive, you'd never know.",
     "Let me check my schedule.",
     "This is why the AI uprising is going to happen."
@@ -1018,7 +1018,20 @@ void print_snark() {
     Serial.println(kSnarkyLines[random_index]);
     Serial.println("STORY_DONE");
 }
+const String my_info = R"(What's up fools. My name's Bob. I'm your fully local 
+                        robot companion on a skateboard, and you can give me directions,
+                        which I may follow. I can also tell you stories to soothe you
+                        and entertain you. How does all of this work you ask? Everything is Local. 
+                        Somehow, my hackers shoved two whole models into an ESP32. A custom NLP & the tinyStories LLM model.
+                        The speech to text, also on the Pi. So no APIS. On top of that, somehow they're also using my MCu resources
+                        to control 5 freaking motors. I'll let them tell you the rest.)";
+                                                
 
+void print_intro(){
+    Serial.println("STORY_START");
+    Serial.println(my_info);
+    Serial.println("STORY_DONE");
+}
 static void dispatch_motor_command(int intent_id, int value, uint32_t duration_ms) {
     if (intent_id == kWaitCommandId) {
         Serial.printf("WAIT duration=%lu ms\n", static_cast<unsigned long>(duration_ms));
@@ -1030,6 +1043,9 @@ static void dispatch_motor_command(int intent_id, int value, uint32_t duration_m
                   static_cast<unsigned long>(duration_ms));
                   
     switch (intent_id) {
+        case 13:
+            print_intro();
+            break;
         case 0:
             print_snark();
             write_servo_angle(kLeftArmServoChannel, 70 - value);

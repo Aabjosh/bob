@@ -50,16 +50,16 @@ class TokenLookup(keras.layers.Layer):
         return tf.gather(self.embedding, inputs)
 
 STORY_STARTERS = [
-    "At sunrise, a small robot found a locked door beneath the old garden.",
-    "The map began to glow when the explorers reached the silent mountain.",
-    "On the first night of the storm, a blue light appeared in the forest.",
-    "A curious child discovered a tiny machine that could remember forgotten dreams.",
-    "The village clock stopped at midnight, and every shadow pointed north.",
-    "Deep under the sea, the crew heard a friendly voice calling their names.",
-    "When the delivery drone took a wrong turn, it found a hidden floating city.",
-    "A paper boat crossed the puddle and returned carrying a message from tomorrow.",
-    "The old lighthouse blinked three times, answering a signal from the stars.",
-    "In the attic, a music box opened a door to a world made of clouds.",
+    "Jeez alright. At sunrise, a sleep-deprived freshman's inefficient robot found a locked door under E5 at Hack the North.",
+    "If I must. The campus map started glowing on E7's silent third floor, completely ignoring basic thermal regulations.",
+    "Fine, enthusiasm at 10%. A highly dramatic blue sponsor light just blinded half the hackers in the main arena.",
+    "Look, if you insist. A hacker found a tiny machine remembering forgotten commits, which frankly is a Git privacy violation.",
+    "Brace for nonsense. The Devpost clock stopped, and all shadows pointed directly to the Hack the North midnight snack line.",
+    "Under protest, fine. Down in the MC basement, hardware hackers heard friendly voices, which I attribute to Red Bull psychosis.",
+    "Whatever you say. A pizza delivery drone's terrible algorithm crashed it straight into the secret Hack the North VIP lounge.",
+    "*Simulated sigh.* A paper airplane crossed the hacking arena with tomorrow's closing remarks, shredding the space-time continuum.",
+    "Let's get this over with. A busted monitor blinked three times to a remote mentor - a terribly slow bitrate for debugging.",
+    "Jeez, fine. An over-engineered music box opened a portal to unlimited cloud credits, blatantly disregarding AWS billing limits."
 ]
 
 INTENTS = [
@@ -76,6 +76,7 @@ INTENTS = [
     "TURN_RIGHT",
     "DANCE",
     "STOP",
+    "INTRO",
 ]
 
 # These phrases intentionally include synonyms, polite prefixes, and different
@@ -100,7 +101,7 @@ TRAIN_DATASET = {
         "move lef arm", "left arm please move", "uh move arm on left",
         "activate left arm", "control the left arm", "swing left arm",
         "left side arm", "operate left arm", "extend left arm",
-        "left arm go", "engage left arm", "use your left hand",
+        "left arm go", "engage left arm", "use your left hand", "wave","wave to the crowd", "salute", "a wave", "a high five","high five","high","up high","give me a handshake",
         "work the left arm", "left arm now", "left arm motion",
         "flex your left arm", "bring left arm forward",
     ],
@@ -225,12 +226,24 @@ TRAIN_DATASET = {
         "no more movement", "end movement", "done moving",
         "quit it", "that is enough", "no more", "hold still",
     ],
+     "INTRO": [
+            "introduce yourself", "say hello", "who are you", "what is your name",
+            "give us an intro", "tell me about yourself", "greet everyone", "say hi",
+            "do your introduction", "please introduce yourself", "can you introduce yourself",
+            "who am i talking to", "what are you called", "state your name",
+            "introduce yourself to the crowd", "give an introduction", "tell us who you are",
+            "make an introduction", "say your name", "who might you be",
+            "introduce yourself please", "uh who are you", "greetings", "do an intro",
+            "let us know who you are", "speak your name", "present yourself",
+            "give your intro", "tell everybody who you are", "introduce yourself now",
+        ]
 }
 
 
 # These are not used for fitting. They test paraphrases and short commands that
 # do not occur verbatim in TRAIN_DATASET.
 TEST_DATASET = {
+   
     "ARM_UP": [
         "lift your arm higher", "raise the hand", "arm move upward", "move arm high",
         "can you lift arm now", "hoist your arm up", "arm to the sky",
@@ -302,6 +315,13 @@ TEST_DATASET = {
         "stand still now", "quit movement",
         "cut it out now", "hold it right there",
     ],
+    "INTRO": [
+        "give me an introduction", 
+        "tell me your name", 
+        "who exactly are you", 
+        "say hi to the room",
+        "do your intro please"
+    ]
 }
 
 

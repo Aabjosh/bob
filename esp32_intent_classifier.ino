@@ -14,7 +14,7 @@
 #include "esp_system.h"
 
 namespace {
-constexpr int kIntentCount = 13;
+constexpr int kIntentCount = 14; 
 constexpr int kMaxQueuedCommands = 8;
 constexpr int kServoFrequency = 50;
 constexpr int kServoResolution = 16;
@@ -32,7 +32,7 @@ TfLiteTensor *output_tensor = nullptr;
 const char *const kIntentNames[kIntentCount] = {
     "ARM_UP", "LEFT_ARM", "RIGHT_ARM", "MOVE_FORWARD", "MOVE_BACKWARD",
     "HEAD_SHAKE", "HEAD_NOD", "HEAD_LEFT", "HEAD_RIGHT", "TURN_LEFT",
-    "TURN_RIGHT", "DANCE", "STOP",
+    "TURN_RIGHT", "DANCE", "STOP", "INTRO", 
 };
 String serial_buffer;
 
@@ -68,6 +68,12 @@ int lookupToken(const char *word) {
 int ruleBasedIntent(const String &raw_text) {
   String lowered = raw_text;
   lowered.toLowerCase();
+  // Rule for INTRO
+  if (lowered.indexOf("intro") >= 0 || lowered.indexOf("who are you") >= 0 ||
+      lowered.indexOf("introduce") >= 0 || lowered.indexOf("say hello") >= 0) {
+    return 13;  // INTRO
+  }
+  
   if (lowered.indexOf("arm") >= 0 && lowered.indexOf("left") >= 0) {
     return 1;  // LEFT_ARM
   }
