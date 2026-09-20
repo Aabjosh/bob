@@ -133,7 +133,7 @@ class Click:
                                         estimatedDist = shoulder_width / (px_w / self.focalLength)
                                         
                                         # Draw a green line ONLY between the shoulders inside the ROI
-                                        cv2.line(undistorted_frame, (lx, ly), (rx, ry), (0, 255, 0) if isObject else (0, 0, 255), 2) # to remove!
+                                        # cv2.line(undistorted_frame, (lx, ly), (rx, ry), (0, 255, 0) if isObject else (0, 0, 255), 2) # to remove!
                     # =========================================================
 
                     if conf >= 0.70 and estimatedDist <= 4:
@@ -143,25 +143,25 @@ class Click:
                         # object/obstacle flag, distance in Z (not numpy), center of obj on x axis relative to sensor
                         returns.append([isObject, float(estimatedDist), centerX])
                         
-                        cv2.rectangle( 
-                            undistorted_frame, 
-                            (xm, ym), 
-                            (xM, yM), 
-                            (0, 255, 0) if isObject else (0, 0, 255), 
-                            2 
-                        ) # to remove!
+                        # cv2.rectangle( 
+                        #     undistorted_frame, 
+                        #     (xm, ym), 
+                        #     (xM, yM), 
+                        #     (0, 255, 0) if isObject else (0, 0, 255), 
+                        #     2 
+                        # ) # to remove!
 
-                        cv2.putText( 
-                            undistorted_frame, 
-                            f"{cls_name} at {estimatedDist:.2f}m\nConfidence:{conf:.2f}", 
-                            (xm, max(ym-10, 15)), 
-                            cv2.FONT_HERSHEY_SCRIPT_COMPLEX, 
-                            0.8, 
-                            (0, 255, 255), 
-                            2 
-                        ) # to remove!
+                        # cv2.putText( 
+                        #     undistorted_frame, 
+                        #     f"{cls_name} at {estimatedDist:.2f}m\nConfidence:{conf:.2f}", 
+                        #     (xm, max(ym-10, 15)), 
+                        #     cv2.FONT_HERSHEY_SCRIPT_COMPLEX, 
+                        #     0.8, 
+                        #     (0, 255, 255), 
+                        #     2 
+                        # ) # to remove!
             
-            cv2.imwrite("distances.png", undistorted_frame) # to remove!
+            # cv2.imwrite("distances.png", undistorted_frame) # to remove!
             if len(returns) > 0:
                 return returns
             else:
