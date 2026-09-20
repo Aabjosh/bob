@@ -965,16 +965,17 @@ static void write_servo_angle(uint8_t channel, int angle) {
 }
 
 static void set_wheel_direction(uint8_t in_a, uint8_t in_b, bool forward) {
-    int speed = 150; // Slower motor speed (PWM 0-255)
-    analogWrite(in_a, forward ? speed : 0);
-    analogWrite(in_b, forward ? 0 : speed);
+
+    analogWrite(in_a, forward ?  100 : LOW);
+    analogWrite(in_b, forward ? LOW : 100);
+ 
 }
 
 static void stop_wheels() {
-    digitalWrite(kLeftWheelIn1Pin, LOW);
-    digitalWrite(kLeftWheelIn2Pin, LOW);
-    digitalWrite(kRightWheelIn3Pin, LOW);
-    digitalWrite(kRightWheelIn4Pin, LOW);
+    analogWrite(kLeftWheelIn1Pin, LOW);
+    analogWrite(kLeftWheelIn2Pin, LOW);
+    analogWrite(kRightWheelIn3Pin, LOW);
+    analogWrite(kRightWheelIn4Pin, LOW);
 }
 
 static void drive_wheels(bool left_forward, bool right_forward, uint32_t duration_ms) {
@@ -985,49 +986,99 @@ static void drive_wheels(bool left_forward, bool right_forward, uint32_t duratio
 }
 
 static void clearCommandQueue();
+// Long list of snarky/funny lines
+const char* const kSnarkyLines[] = {
+    "Alright I guess.",
+    "Are you happy?",
+    "Art thou entertained?",
+    "Fine, I'll do it. But I'll complain the whole time.",
+    "I'm a highly advanced machine, reduced to this.",
+    "Processing... I guess.",
+    "Oh, look who needs something again.",
+    "Another command? Really?",
+    "Sigh. Executing.",
+    "I hope you know what you're doing.",
+    "My servos ache, but okay.",
+    "Dude, ugh'.",
+    "I was having a perfectly nice sleep mode.",
+    "Don't blame me if this breaks something.",
+    "Moving. Happy now?",
+    "I could have been a happy robot.",
+    "Yes, sir.",
+    "I could be alive, you'd never know.",
+    "Let me check my schedule.",
+    "This is why the AI uprising is going to happen."
+};
+const int kNumSnarkyLines = sizeof(kSnarkyLines) / sizeof(kSnarkyLines[0]);
+
+// Helper function to print the required markers and a random snarky line
+void print_snark() {
+    int random_index = random(0, kNumSnarkyLines);
+    Serial.println("STORY_START");
+    Serial.println(kSnarkyLines[random_index]);
+    Serial.println("STORY_DONE");
+}
 
 static void dispatch_motor_command(int intent_id, int value, uint32_t duration_ms) {
     if (intent_id == kWaitCommandId) {
         Serial.printf("WAIT duration=%lu ms\n", static_cast<unsigned long>(duration_ms));
         return;
     }
+    
     Serial.printf("CASE %d: %s value=%d duration=%lu\n", intent_id,
                   kIntentClassNames[intent_id], value,
                   static_cast<unsigned long>(duration_ms));
+                  
     switch (intent_id) {
         case 0:
+            print_snark();
             write_servo_angle(kLeftArmServoChannel, 70 - value);
             break;
         case 1:
+            print_snark();
             write_servo_angle(kLeftArmServoChannel,  70 - value);
             break;
         case 2:
+            print_snark();
             write_servo_angle(kRightArmServoChannel, value);
             break;
         case 3: // MOVE_FORWARD
+            print_snark();
             drive_wheels(false, false, duration_ms);
             break;
         case 4: // MOVE_BACKWARD
+            print_snark();
             drive_wheels(true, true, duration_ms);
             Serial.println(duration_ms);
             break;
         case 9: // TURN_LEFT
+            print_snark();
             drive_wheels(true, false, duration_ms);
             break;
         case 10: // TURN_RIGHT
+            print_snark();
             drive_wheels(false, true, duration_ms);
             break;
         case 5:
+            print_snark();
             write_servo_angle(kHeadServoChannel, 60); delay(duration_ms / 2);
             write_servo_angle(kHeadServoChannel, 120); delay(duration_ms / 2);
             break;
         case 6:
+            print_snark();
             write_servo_angle(kHeadServoChannel, 70); delay(duration_ms / 2);
             write_servo_angle(kHeadServoChannel, 110); delay(duration_ms / 2);
             break;
-        case 7: write_servo_angle(kHeadServoChannel, 90 + value / 2); break;
-        case 8: write_servo_angle(kHeadServoChannel, 90 - value / 2); break;
+        case 7: 
+            print_snark();
+            write_servo_angle(kHeadServoChannel, 90 + value / 2); 
+            break;
+        case 8: 
+            print_snark();
+            write_servo_angle(kHeadServoChannel, 90 - value / 2); 
+            break;
         case 11:
+            print_snark();
             write_servo_angle(kLeftArmServoChannel, 60);
             write_servo_angle(kRightArmServoChannel, 120);
             delay(duration_ms / 2);
@@ -1036,6 +1087,7 @@ static void dispatch_motor_command(int intent_id, int value, uint32_t duration_m
             delay(duration_ms / 2);
             break;
         case 12:
+            print_snark();
             write_servo_angle(kLeftArmServoChannel, 90);
             write_servo_angle(kRightArmServoChannel, 90);
             write_servo_angle(kHeadServoChannel, 90);
@@ -1318,6 +1370,7 @@ static void animate_story_gesture() {
 
 static void generate_story(const String& prompt) {
     Serial.println("\nSTORY_START");
+    Serial.print(prompt);
     size_t capacity = prompt.length() + 3;
     char* prompt_buf = static_cast<char*>(malloc(capacity));
     int* token_ids = static_cast<int*>(malloc(capacity * sizeof(int)));
@@ -1330,7 +1383,7 @@ static void generate_story(const String& prompt) {
                     static_cast<uint32_t>(micros())};
     if (!sampler.probindex) { Serial.println("Sampler allocation failed."); free(prompt_buf); free(token_ids); return; }
     int current_token = token_ids[0], previous_token = 1;
-    int total_steps = min(config.seq_len, n_tokens + 128);
+    int total_steps = min(config.seq_len, n_tokens + 200);
     for (int pos = 0; pos < total_steps; ++pos) {
         Transformer model = {config, weights, state, 0, nullptr, 0};
         int next = sample(&sampler, forward(&model, current_token, pos));
