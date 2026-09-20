@@ -4,11 +4,14 @@ import ClickClass as CC
 import navigate as NavClass
 import findObject as FO
 import time
+import seek
+
+USE_HEAD_TRACKING = False  # True = the older head-centering + rotate-90 navigator below
 
 BODY_90_TURN_STEPS = 4  # tune this: how many "turn right" pulses = 90° body rotation on real hardware
 
 MAX_EMPTY_CYCLES = 4     # give up after this many consecutive cycles with no target in view
-MAX_TASK_SECONDS = 120   # hard cap on one navigation task
+MAX_TASK_SECONDS = 180   # hard cap on one navigation task
 HEAD_GAIN = 0.7          # fraction of the measured angle error corrected per head move
 MUTE_AFTER_SECONDS = 4   # keep muting briefly: the ESP32's last quip arrives after we finish
 
@@ -69,6 +72,13 @@ def handle_instruction(instruction):
             _mute_until = time.time() + MUTE_AFTER_SECONDS
 
 def _navigate_to(tagID):
+    if not USE_HEAD_TRACKING:
+        result = seek.seek_target(cam, tagID, time.time() + MAX_TASK_SECONDS)
+        print(f"seek finished: {result}")
+        return
+    _navigate_with_head(tagID)
+
+def _navigate_with_head(tagID):
     # reset navigator state for a fresh task
     nav.avoid_state = None
     nav.avoid_direction = None

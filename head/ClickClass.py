@@ -221,10 +221,8 @@ class Click:
                 self.lastKnownTarget = closest
                 return closest, obstaclesFound
             else:
-                if len(obstaclesFound) > 0:
-                    return self.lastKnownTarget, obstaclesFound
-                else:
-                    return None, None
+                # no target in this frame; do not hand back a cached one, it would look like it is still visible
+                return None, obstaclesFound if len(obstaclesFound) > 0 else None
         else:
             return None, None
 

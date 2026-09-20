@@ -112,9 +112,28 @@ def _check_cancel():
     if cancel.is_set():
         raise Cancelled()
 
+def sleep(seconds):
+    """time.sleep that notices a cancel within 50 ms."""
+    end = time.time() + seconds
+    while True:
+        _check_cancel()
+        remaining = end - time.time()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.05, remaining))
+
 def send_body_command(cmd):
     _check_cancel()
     ser.write((cmd + "\n").encode())
+
+MOTION_SETTLE_S = 0.5  # after a pulse ends: ESP32 latency + let the camera image settle
+
+def send_motion(intent, duration_ms):
+    """Timed wheel pulse via the firmware's PLAN format (intent: TURN_LEFT, TURN_RIGHT, MOVE_FORWARD).
+    Blocks until the pulse has finished, so the next camera frame is taken standing still."""
+    _check_cancel()
+    ser.write(f"PLAN {intent},90,{int(duration_ms)}\n".encode())
+    sleep(duration_ms / 1000 + MOTION_SETTLE_S)
 
 # The ESP32's head commands are absolute: "head left N degrees" puts the servo at 90 + N/2 and
 # "head right N degrees" at 90 - N/2 (N is clamped to 0-180), and the servo jumps there at full
